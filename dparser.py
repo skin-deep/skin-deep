@@ -1,11 +1,12 @@
 import glob
 import pickle
-#import functools
-#import inspect
 import os, os.path, sys
 import pandas as pd
 import numpy as np
 import xml.etree.ElementTree as ET
+import re
+
+DATA_COLNAME = 'Target'
 
 def ask_for_files():
     files = set()
@@ -17,19 +18,20 @@ def ask_for_files():
 
 # parsers
 def parse_datasets(files=None, verbose=False, *args, **kwargs):
-    files = glob.glob(files) if files else tuple()
+    files = glob.glob(files) if files else files
     if not files: 
         if verbose: files = ask_for_files()
     for filename in files:
-        table = None
+        table = []
+        accession = re.match('([A-Z]{3}\d+?)-.*', filename).group(1) or filename
         with open(filename) as file:
             try:
-                table = pd.read_table(file, dtype={'a' : str, 'b' : np.float64},
-                                     names = (filename, 'values'))
+                table = pd.read_table(file,
+                                     names = (DATA_COLNAME, accession))
             except Exception as E:
-                sys.exchook(type(E), E.message, sys.exc_traceback)
+                sys.excepthook(type(E), E.msg, sys.exc_traceback)
         if verbose: 
-            print ('Could not parse {}!'.format(filename) if not table else '{} parsed successfully.'.format(filename))
+            print ('Could not parse {}!'.format(filename) if not any(table) else '{} parsed successfully.'.format(filename))
         yield table
 
 
@@ -37,7 +39,7 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
     if tags is None: tags = {'sample'}
     if junk_phrases is None: junk_phrases = {'{http://www.ncbi.nlm.nih.gov/geo/info/MINiML}',}
     files = glob.glob(files) if files else files
-    if not files: 
+    if not files:
         if verbose: files = ask_for_files()
         else: return list()
     data = []
@@ -59,11 +61,13 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
                         subtag = subtag.replace(junk, '')
                     if not all((subtag, subtext)): continue
                     record[subtag] = subtext
-                    if verbose: 
+                    if verbose:
                         print (subtext)
-                        situation = input('[B]reak/[S]ilence/[Continue]: ').strip()
+                        situation = input('\n[B]reak/[S]ilence/[Continue]: ').strip()
+                        print('')
                         if situation == 'B': return list()
                         if situation == 'S': verbose = False
+                        
                 all_records.append(record)
             data.append(pd.DataFrame(all_records))
     return data
@@ -77,34 +81,69 @@ def dbgpars(*args, avoid_lists=True, **kwargs):
 def clean_xmls(parsed_input):
     cleaned = (x for x in parsed_input)
     cleaned = (fr.set_index('Accession') for fr in cleaned)
+    cleaned = (get_patient_type(fr) for fr in cleaned)
+    cleaned = (fr.transpose() for fr in cleaned)
     for clean_xml in cleaned:
         yield clean_xml
+
+def get_patient_type(dframe):
+    """Retrieves the label of the sample type from the Title field and returns it as a (new) dataframe."""
+    #return dframe['Title']
+    return dframe.transform({'Title' : lambda x: x.split('_')[2]})
 
 def clean_data(raw_data):
     for datum in raw_data:
         cleaned = datum
-        # nothing for now
+        cleaned = cleaned.set_index(DATA_COLNAME)
+        #cleaned = cleaned.transpose()
         yield cleaned
 
 # Higher-level logic for integration
-def xml_pipeline(*args, **kwargs):
-    raw_parse = parse_miniml('*.xml', *args, **kwargs)
-    cleaned = tuple(clean_xmls(raw_parse))
+def xml_pipeline(path=None, *args, **kwargs):
+    raw_parse = parse_miniml(path or '*.xml', *args, **kwargs)
+    cleaned = clean_xmls(raw_parse)
     return cleaned
    
-def txt_pipeline(*args, **kwargs):
-    raw_data = parse_datasets('*.txt', *args, **kwargs)
-    cleaned = tuple(clean_data(raw_parse))
+def txt_pipeline(path=None, *args, **kwargs):
+    raw_data = parse_datasets(path or '*.txt', *args, **kwargs)
+    cleaned = clean_data(raw_data)
     return cleaned
+    
+def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs):
+    xmls = xml_pipeline(path=xml_path, *args, **kwargs)
+    txts = txt_pipeline(path=txt_path, *args, **kwargs)
+    
+    #pool xmls - we'll need to iterate over them repeatedly
+    xmls = tuple(xmls)
+    
+    for txt in txts:
+        accession = txt.columns[0]
+        sample_type = None
+        for xml in xmls:
+            sample_type = xml.get(accession)
+            #print (sample_type, '\n')
+            if sample_type is not None: break
+        if sample_type is None or not len(sample_type):
+            if verbose: print('Warning: could not determine any sample type for a sample! Skipping!')
+            continue
+        yield (txt, sample_type.to_string(index=False))
+        
 
-def main():
-    descriptors = xml_pipeline()
-    data = txt_pipeline()
-    tuple(map(print, descriptors))
+def main(xml=None, txt=None, verbose=None, *args, **kwargs):
+    data = combo_pipeline(xml_path=xml, txt_path=txt, verbose=verbose)
+    for d in data:
+        print(d[0].columns.item(), d[1])
+    #print(len(tuple(data)))
     return 1
 
 if __name__ == '__main__':
-    sys.exit(main())
+    import argparse
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument('--xml')
+    argparser.add_argument('--txt')
+    argparser.add_argument('-v', '--verbose', action='store_true')
+    args = vars(argparser.parse_args())
+    sys.exit(main(**args))
 
 
 
