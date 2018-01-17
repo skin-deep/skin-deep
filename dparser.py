@@ -21,15 +21,17 @@ def parse_datasets(files=None, verbose=False, *args, **kwargs):
     files = glob.glob(files) if files else files
     if not files: 
         if verbose: files = ask_for_files()
-    for filename in files:
+    for filepath in files:
         table = []
-        accession = re.match('([A-Z]{3}\d+?)-.*', filename).group(1) or filename
-        with open(filename) as file:
+        filename = os.path.basename(filepath)
+        accession = re.match('([A-Z]{3}\d+?)-.*', filename)
+        accession = accession.group(1) if accession else filename
+        with open(filepath) as file:
             try:
                 table = pd.read_table(file,
                                      names = (DATA_COLNAME, accession))
             except Exception as E:
-                sys.excepthook(type(E), E.msg, sys.exc_traceback)
+                sys.excepthook(type(E), E.message, sys.exc_traceback)
         if verbose: 
             print ('Could not parse {}!'.format(filename) if not any(table) else '{} parsed successfully.'.format(filename))
         yield table
@@ -116,17 +118,21 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
     #pool xmls - we'll need to iterate over them repeatedly
     xmls = tuple(xmls)
     
+    count = 0
     for txt in txts:
+        count += 1
         accession = txt.columns[0]
         sample_type = None
         for xml in xmls:
             sample_type = xml.get(accession)
             #print (sample_type, '\n')
             if sample_type is not None: break
+            print(accession)
         if sample_type is None or not len(sample_type):
             if verbose: print('Warning: could not determine any sample type for a sample! Skipping!')
             continue
         yield (txt, sample_type.to_string(index=False))
+    print("Found {} datafiles.".format(count))
         
 
 def main(xml=None, txt=None, verbose=None, *args, **kwargs):
