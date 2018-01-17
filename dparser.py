@@ -84,7 +84,7 @@ def clean_xmls(parsed_input):
     cleaned = (x for x in parsed_input)
     cleaned = (fr.set_index('Accession') for fr in cleaned)
     cleaned = (get_patient_type(fr) for fr in cleaned)
-    cleaned = (fr.transpose() for fr in cleaned)
+    #cleaned = (fr.transpose() for fr in cleaned)
     for clean_xml in cleaned:
         yield clean_xml
 
@@ -113,33 +113,58 @@ def txt_pipeline(path=None, *args, **kwargs):
     
 def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs):
     xmls = xml_pipeline(path=xml_path, *args, **kwargs)
-    txts = txt_pipeline(path=txt_path, *args, **kwargs)
-    
-    #pool xmls - we'll need to iterate over them repeatedly
-    xmls = tuple(xmls)
-    
+    #txts = txt_pipeline(path=txt_path, *args, **kwargs)
     count = 0
-    for txt in txts:
-        count += 1
-        accession = txt.columns[0]
-        sample_type = None
-        for xml in xmls:
-            sample_type = xml.get(accession)
-            #print (sample_type, '\n')
-            if sample_type is not None: break
-            print(accession)
-        if sample_type is None or not len(sample_type):
-            if verbose: print('Warning: could not determine any sample type for a sample! Skipping!')
-            continue
-        yield (txt, sample_type.to_string(index=False))
+    
+    if False: # TXT-first
+        #pool xmls - we'll need to iterate over them repeatedly
+        xmls = tuple(xmls)
+        
+        for txt in txts:
+            count += 1
+            accession = txt.columns[0]
+            sample_type = None
+            for xml in xmls:
+                sample_type = xml.get(accession)
+                #print (sample_type, '\n')
+                if sample_type is not None: break
+                print(accession)
+            if sample_type is None or not len(sample_type):
+                if verbose: print('Warning: could not determine any sample type for a sample! Skipping!')
+                continue
+            yield pd.DataFrame.from_records([txt, sample_type], index=['Accession', 'Type']).transpose()
+        
+    for xml in xmls:
+        sample_groups = xml.groupby('Title').groups
+        types = set(sample_groups.keys())
+        pos = 0
+        while types:
+            batch = {}
+            ignored = set()
+            for t in types:
+                if t in ignored: continue
+                try: 
+                    batch.update({t : sample_groups[t][pos]})
+                    count += 1
+                except IndexError as IE:
+                    ignored.update(t)
+            if not len(batch): break
+            yield batch
+            pos += 1
+            
+   
     print("Found {} datafiles.".format(count))
         
 
 def main(xml=None, txt=None, verbose=None, *args, **kwargs):
     data = combo_pipeline(xml_path=xml, txt_path=txt, verbose=verbose)
+    #start = (next(data))
     for d in data:
-        print(d[0].columns.item(), d[1])
+        #start = start.append(d, ignore_index=True)
+        print (d)
+        #print(d[0].columns.item(), d[1])
     #print(len(tuple(data)))
+    #print(start.groupby('Type').groups)
     return 1
 
 if __name__ == '__main__':

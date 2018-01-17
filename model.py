@@ -1,10 +1,6 @@
-#import keras
 import sys
 import pickle
 import dparser as geo
-
-# A bit more unorthodox than from m import as...
-#Model = keras.models.Model
         
 def fetch_batch(stream, batch_size=10, aggregator=list, *args, **kwargs):
     """A generic buffer that reads and yields N values from a passed generator as an iterable.
@@ -37,6 +33,10 @@ def feed_data(batch_size=10, compressed=32, xml=None, txt=None):
         #note to self - can use this part to sample the subpopulations proportionately
         
 def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid')):
+    import keras
+    # A bit more unorthodox than from m import as...
+    Model = keras.models.Model
+    
     #calculate sizes
     uncompr_size = datashape[0]
     compr_size = min(uncompr_size, uncompr_size // compression_fac)
