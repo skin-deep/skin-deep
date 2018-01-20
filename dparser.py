@@ -144,7 +144,7 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
             for t in types:
                 if t in ignored: continue
                 try: 
-                    batch.update({t : sample_groups[t][pos]})
+                    batch.update({sample_groups[t][pos] : t})
                     count += 1
                 except IndexError as IE:
                     ignored.update(t)
