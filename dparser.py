@@ -139,12 +139,12 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
         types = set(sample_groups.keys())
         pos = 0
         while types:
-            batch = {}
+            batch = set() #dict/set!
             ignored = set()
             for t in types:
                 if t in ignored: continue
                 try: 
-                    batch.update({sample_groups[t][pos] : t})
+                    batch.update({sample_groups[t][pos]}) #:t in dict
                     count += 1
                 except IndexError as IE:
                     ignored.update(t)
