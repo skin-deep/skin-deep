@@ -96,16 +96,24 @@ def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     
     train_test_splitter = split_data(batches)
     train_files, test_files = itt.tee(train_test_splitter)
+    
     train_files = itt.chain.from_iterable(itt.islice(train_files, 0, None, 2))
     test_files = itt.chain.from_iterable(itt.islice(test_files, 1, None, 2))
-    #print(next(train_files))
-    #return
+    # print(next(train_files), '\n\n', next(test_files))
+    # return
     
     # load values for each accession:
     def get_file_data(f):
-        return next(geo.txt_pipeline(os.path.join(dir, f + '*'))).head(5)
-    train = (tuple(map(get_file_data, x)) for x in train_files)
-    test = (tuple(map(get_file_data, x)) for x in test_files)
+        return next(geo.txt_pipeline(os.path.join(dir, f + '*'))).head(105)
+        
+    train = (tuple(zip(x, map(get_file_data, x.values()))) for x in train_files)
+    test = (tuple(zip(x, map(get_file_data, x.values()))) for x in test_files)
+    
+    drop_label = True
+    retrieve_df = ((lambda x: x[1]) if drop_label 
+                    else (lambda pair: pair[1].assign(Label=np.array(pair[0]))))
+    train = (tuple(map(retrieve_df, df)) for df in train)
+    test = (tuple(map(retrieve_df, df)) for df in test)
     #print ( ( (next(train)) ) )
     #return
     
@@ -120,13 +128,15 @@ def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     
     train = itt.chain.from_iterable(train) #break it up into individual records
     test = itt.chain.from_iterable(test)
-    print(next(train), '\n', next(test))
-    return
+    #print(next(train), '\n'*3, next(test))
+    #return
 
     # train = ((x.T.values, np.array([x.index.values])) for x in train)
     # test = ((x.T.values, np.array([x.index.values])) for x in test)
     train = ((x.T.values) for x in train)
     test = ((x.T.values) for x in test)
+    #print(next(train), '\n'*3, next(test))
+    #return
     traing = (zip(train, test))
     
     models = build_models(datashape=train_size)
@@ -136,10 +146,20 @@ def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     def pop_and_put(gen):
         nxt = next(gen) # pop...
         return (nxt, itt.chain([nxt], gen)) #...and return for processing
-    while True:
-        print((next(traing)))
-        autoencoder.fit_generator(traing, steps_per_epoch=1)
-        if input('---'): break
+    fits = 1
+    while fits:
+        fits -= 1
+        if not fits or fits < 1:
+            try:
+                fits = int(input("Enter a number of fittings to perform before prompting again.\n (<= 0, empty and invalid values will quit the program immediately): "))
+            except Exception:
+                fits = 0
+                
+        if fits < 1:
+            mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
+            if mdl_file: autoencoder.save(mdl_file)
+        else:
+            autoencoder.fit_generator(traing, steps_per_epoch=75)#, initial_epoch=fits+1)
 
 if __name__ == '__main__':
     print('')
