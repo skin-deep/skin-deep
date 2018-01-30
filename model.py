@@ -16,13 +16,13 @@ def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid')):
     # calculate sizes
     try:
         uncompr_size = datashape[0]
-        compr_size = (min(uncompr_size, uncompr_size // compression_fac))
+        compr_size = max(1, (min(uncompr_size, uncompr_size // compression_fac)))
     except (IndexError, TypeError):
         uncompr_size = None
         compr_size = compression_fac
 
     # layers
-    inbound = keras.layers.Input(shape=(uncompr_size,))
+    inbound = keras.layers.Input(shape=datashape[:-1])
     #inbound = keras.layers.Flatten()(inbound)
     dummy_in = keras.layers.Input(shape=datashape)  # dummy input for feeding into decoder separately
     encoded = keras.layers.Dense(compr_size, activation=activators[0])(inbound)
@@ -102,7 +102,8 @@ def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     #return
     
     # load values for each accession:
-    def get_file_data(f): return next(geo.txt_pipeline(os.path.join(dir, f + '*')))#.head(3)
+    def get_file_data(f):
+        return next(geo.txt_pipeline(os.path.join(dir, f + '*'))).head(5)
     train = (tuple(map(get_file_data, x)) for x in train_files)
     test = (tuple(map(get_file_data, x)) for x in test_files)
     #print ( ( (next(train)) ) )
@@ -118,27 +119,26 @@ def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     # Split the data up into single datapoints
     
     train = itt.chain.from_iterable(train) #break it up into individual records
-    #train = (x.transpose() for x in train)
-    #train = map(lambda x: tuple(zip(*x.to_records())), train)
-    #train = (tuple(map(np.asarray, x)) for x in train)
-    #train = (tuple(map(lambda v: v.values, x) for x in train))
-    train = ((x.T.values[0], x.index.values) for x in train)
-    #train = (tuple(map(lambda x: np.reshape(x, (train_size[0], 1, train_size[1])), a)) for a in train)
-    #train = (tuple(map(lambda x: x.flatten(), a)) for a in train)
-    #print(train)
-    
-    #train = map(lambda x: tuple(zip(*x.iterrows())), train)
-    #test = itt.chain.from_iterable(test)
-    #print ( ( (next(train)) ) )
-    #return
+    test = itt.chain.from_iterable(test)
+    print(next(train), '\n', next(test))
+    return
+
+    # train = ((x.T.values, np.array([x.index.values])) for x in train)
+    # test = ((x.T.values, np.array([x.index.values])) for x in test)
+    train = ((x.T.values) for x in train)
+    test = ((x.T.values) for x in test)
+    traing = (zip(train, test))
     
     models = build_models(datashape=train_size)
     #return
     autoencoder = models[0]
     autoencoder.compile(optimizer='adadelta', loss='binary_crossentropy')
+    def pop_and_put(gen):
+        nxt = next(gen) # pop...
+        return (nxt, itt.chain([nxt], gen)) #...and return for processing
     while True:
-        #print((next(train)))
-        autoencoder.fit_generator(train, steps_per_epoch=1)
+        print((next(traing)))
+        autoencoder.fit_generator(traing, steps_per_epoch=1)
         if input('---'): break
 
 if __name__ == '__main__':
