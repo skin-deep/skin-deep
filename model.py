@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, shutil
 import pickle
 import dparser as geo
 import pandas as pd
@@ -7,12 +7,11 @@ import itertools as itt
 import random
 #from pprint import pprint as print
 
-def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid')):
+def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), **kwargs):
     import keras
     # A bit more unorthodox than from m import as...
     Model = keras.models.Model
-    #datashape = (datashape,)
-
+    
     # calculate sizes
     try:
         uncompr_size = datashape[0]
@@ -20,17 +19,32 @@ def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid')):
     except (IndexError, TypeError):
         uncompr_size = None
         compr_size = compression_fac
+        
+    # deep levels handling:
+    deep_lvls = kwargs.get('depth', 1)
+    try: deep_lvls = max(1, abs(int(deep_lvls)))
+    except Exception: deep_lvls = 1
+    
+    clamp_size = lambda S: max(1, min(S, uncompr_size-1))
+    lay_sizes = [clamp_size(compr_size * (2**lvl)) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
 
     # layers
     inbound = keras.layers.Input(shape=datashape[:-1])
-    #inbound = keras.layers.Flatten()(inbound)
     dummy_in = keras.layers.Input(shape=datashape)  # dummy input for feeding into decoder separately
-    encoded = keras.layers.Dense(compr_size, activation=activators[0])(inbound)
-    # encoded = keras.layers.Reshape((compr_size, 1, 1))(encoded)
-    # encoded = keras.layers.Flatten()(encoded)
-    # encoded = keras.layers.Reshape((uncompr_size,))(encoded)
-    decoded = keras.layers.Dense(uncompr_size, activation=activators[1])(encoded)
-
+    
+    encoded = keras.layers.Dense(lay_sizes[0], activation=activators[0])(inbound)
+    for siz in lay_sizes[1:]: #[0]th is already built
+        encoded = keras.layers.Dense(siz, activation=activators[0])(encoded)
+        
+    if deep_lvls > 1:
+        decoded = keras.layers.Dense(lay_sizes[-len(lay_sizes)], activation=activators[1])(encoded)
+        for siz in lay_sizes[-2:0:-1]:
+            decoded = keras.layers.Dense(siz, activation=activators[0])(decoded)
+        # let's make sure the last layer is 1:1 to input no matter what
+        decoded = keras.layers.Dense(uncompr_size, activation=activators[0])(decoded)
+    else:
+        decoded = keras.layers.Dense(uncompr_size, activation=activators[0])(encoded)
+        
     # models
     encoder = Model(inbound, encoded)
     autoencoder = Model(inbound, decoded)
@@ -104,7 +118,7 @@ def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     
     # load values for each accession:
     def get_file_data(f):
-        return next(geo.txt_pipeline(os.path.join(dir, f + '*'))).head(105)
+        return next(geo.txt_pipeline(os.path.join(dir, f + '*'))).tail(10000)
         
     train = (tuple(zip(x, map(get_file_data, x.values()))) for x in train_files)
     test = (tuple(zip(x, map(get_file_data, x.values()))) for x in test_files)
@@ -139,7 +153,7 @@ def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     #return
     traing = (zip(train, test))
     
-    models = build_models(datashape=train_size)
+    models = build_models(datashape=train_size, depth=4)
     #return
     autoencoder = models[0]
     autoencoder.compile(optimizer='adadelta', loss='binary_crossentropy')
@@ -147,19 +161,28 @@ def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
         nxt = next(gen) # pop...
         return (nxt, itt.chain([nxt], gen)) #...and return for processing
     fits = 1
+    mdl_file = NotImplemented
     while fits:
         fits -= 1
         if not fits or fits < 1:
-            try:
-                fits = int(input("Enter a number of fittings to perform before prompting again.\n (<= 0, empty and invalid values will quit the program immediately): "))
-            except Exception:
-                fits = 0
-                
-        if fits < 1:
-            mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
-            if mdl_file: autoencoder.save(mdl_file)
-        else:
-            autoencoder.fit_generator(traing, steps_per_epoch=75)#, initial_epoch=fits+1)
+            while True:
+                try:
+                    fits = int(input("Enter a number of fittings to perform before prompting again.\n (values <= 0 will terminate the program): "))
+                    break
+                except Exception as Exc:
+                    if True: print(Exc)
+                    print("Invalid input. Try again.")
+                    
+        if fits:
+            if mdl_file is NotImplemented: mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
+            
+            try: autoencoder.fit_generator(traing, steps_per_epoch=75)#, initial_epoch=fits+1)
+            except KeyboardInterrupt: fits = 0
+            
+            if mdl_file and (not fits % 10 or 0 <= fits < 10): 
+                try: os.replace(mdl_file, mdl_file+'.backup')
+                except Exception: pass
+                autoencoder.save(mdl_file)
 
 if __name__ == '__main__':
     print('')

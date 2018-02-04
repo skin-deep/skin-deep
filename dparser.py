@@ -154,7 +154,7 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
             pos += 1
             
    
-    print("Found {} datafiles.".format(count))
+    print("\nFound {} datafiles. \n".format(count))
         
 
 def main(xml=None, txt=None, verbose=None, *args, **kwargs):
