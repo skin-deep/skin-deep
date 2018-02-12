@@ -74,11 +74,6 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
             data.append(pd.DataFrame(all_records))
     return data
 
-def dbgpars(*args, avoid_lists=True, **kwargs):
-    # testing, shorthand method!
-    parsed_xmls = parse_miniml('*.xml', *args, **kwargs)
-    return parsed_xmls[0] if (avoid_lists and len(parsed_xmls) == 1) else parsed_xmls
-
 # Low-level, intra-dataset cleaning logic.
 def clean_xmls(parsed_input):
     cleaned = (x for x in parsed_input)
@@ -91,7 +86,8 @@ def clean_xmls(parsed_input):
 def get_patient_type(dframe):
     """Retrieves the label of the sample type from the Title field and returns it as a (new) dataframe."""
     #return dframe['Title']
-    return dframe.transform({'Title' : lambda x: x.split('_')[2]})
+    #print('TITLE IS: {}'.format(dframe['Title']))
+    return dframe.transform({'Title' : lambda x: x.split('_')[2]}) # 2 for mag, 1 for mag2
 
 def clean_data(raw_data):
     for datum in raw_data:
@@ -115,25 +111,7 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
     xmls = xml_pipeline(path=xml_path, *args, **kwargs)
     #txts = txt_pipeline(path=txt_path, *args, **kwargs)
     count = 0
-    
-    if False: # TXT-first
-        #pool xmls - we'll need to iterate over them repeatedly
-        xmls = tuple(xmls)
-        
-        for txt in txts:
-            count += 1
-            accession = txt.columns[0]
-            sample_type = None
-            for xml in xmls:
-                sample_type = xml.get(accession)
-                #print (sample_type, '\n')
-                if sample_type is not None: break
-                print(accession)
-            if sample_type is None or not len(sample_type):
-                if verbose: print('Warning: could not determine any sample type for a sample! Skipping!')
-                continue
-            yield pd.DataFrame.from_records([txt, sample_type], index=['Accession', 'Type']).transpose()
-        
+
     for xml in xmls:
         sample_groups = xml.groupby('Title').groups
         types = set(sample_groups.keys())
