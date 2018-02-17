@@ -14,9 +14,11 @@ def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), 
     
     # calculate sizes
     try:
+        print("DATASHAPE: "+str(datashape))
         uncompr_size = datashape[0]
         compr_size = max(1, (min(uncompr_size, uncompr_size // compression_fac)))
-    except (IndexError, TypeError):
+    except (IndexError, TypeError) as E:
+        print(E)
         uncompr_size = None
         compr_size = compression_fac
         
@@ -27,18 +29,20 @@ def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), 
     
     clamp_size = lambda S: max(1, min(S, uncompr_size-1))
     lay_sizes = [clamp_size(compr_size * (2**lvl)) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
+    print(lay_sizes)
 
     # layers
-    inbound = keras.layers.Input(shape=datashape[:-1])
-    dummy_in = keras.layers.Input(shape=datashape)  # dummy input for feeding into decoder separately
+    inbound = keras.layers.Input(shape=(datashape[:-1] or [datashape[0]]))
+
     
     encoded = keras.layers.Dense(lay_sizes[0], activation=activators[0])(inbound)
     for siz in lay_sizes[1:]: #[0]th is already built
         encoded = keras.layers.Dense(siz, activation=activators[0])(encoded)
+    dummy_in = keras.layers.Input(shape=[lay_sizes[-2] or lay_sizes[-1]])  # dummy input for feeding into decoder separately
         
     if deep_lvls > 1:
-        decoded = keras.layers.Dense(lay_sizes[-len(lay_sizes)], activation=activators[1])(encoded)
-        for siz in lay_sizes[-2:0:-1]:
+        decoded = keras.layers.Dense(lay_sizes[-2], activation=activators[1])(encoded)
+        for siz in lay_sizes[-3:0:-1]:
             decoded = keras.layers.Dense(siz, activation=activators[0])(decoded)
         # let's make sure the last layer is 1:1 to input no matter what
         decoded = keras.layers.Dense(uncompr_size, activation=activators[0])(decoded)
@@ -48,7 +52,7 @@ def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), 
     # models
     encoder = Model(inbound, encoded)
     autoencoder = Model(inbound, decoded)
-    decoder = None#Model(dummy_in, autoencoder.layers[-1](dummy_in))
+    decoder = Model(dummy_in, autoencoder.layers[-1](dummy_in))
 
     return (autoencoder, encoder, decoder)
 
@@ -129,7 +133,7 @@ def load_model(*args, model_path=NotImplemented, **kwargs):
             print("\n\nModel could not be loaded from path {}!".format(loaded_path))
         return model, loaded_path
           
-def build_datastreams_gen(xml=None, txt=None, dir=None, samplesize=10000, **kwargs):
+def build_datastreams_gen(xml=None, txt=None, dir=None, **kwargs):
     DEBUG = kwargs.get('debug', False)
     if DEBUG: DEBUG = str(DEBUG).strip()
     dir = os.getcwd() if not dir else (dir if os.path.isabs(dir) else os.path.join(os.getcwd(), dir))
@@ -141,7 +145,7 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, samplesize=10000, **kwar
     batches = fetch_batch(datastream)
     if DEBUG == '1':
         print(next(batches))
-        return
+        return next(batches)
     
     train_test_splitter = split_data(batches)
     train_files, test_files = itt.tee(train_test_splitter)
@@ -150,7 +154,7 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, samplesize=10000, **kwar
     test_files = itt.chain.from_iterable(itt.islice(test_files, 1, None, 2))
     if DEBUG == '2':
         print(next(train_files), '\n\n', next(test_files))
-        return
+        return next(train_files)
     
     # load values for each accession:
     def get_file_data(f):
@@ -160,49 +164,56 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, samplesize=10000, **kwar
     test = (tuple(zip(x, map(get_file_data, x.values()))) for x in test_files)
     if DEBUG == '3':
         print ( ( (next(train)) ) )
-        return
+        return (next(train))
     
     drop_label = True
     retrieve_df = ((lambda x: x[1]) if drop_label 
                     else (lambda pair: pair[1].assign(Label=np.array(pair[0]))))
     train = ((map(retrieve_df, df)) for df in train)
     test = ((map(retrieve_df, df)) for df in test)
-    
-    nxt = next(itt.chain.from_iterable(train))
-    nxt = nxt.sample(samplesize)
-    train_size = nxt.shape # sample the data for size
+    if DEBUG == '4':
+        print ( ( (next(train)) ) )
+        return (next(train))
+
+    train = (x for x in itt.chain.from_iterable(train))
+    test = (x for x in itt.chain.from_iterable(test))
+    if DEBUG == '5':
+        print(next(train), '\n'*3, next(test))
+        return (next(train))
+        
+    mode = kwargs.get('mode', 'train')
+    datagen = {'train': lambda: (train, train), 
+            'test': lambda: (test, test), 
+            'cross': lambda: (train, test),}.get(mode, lambda: None)()
+    return datagen
+          
+def sample_labels(generators, samplesize=10000, *args, **kwargs):
+    out_generators = [None for _ in range(len(generators))]
+    nxt = next(generators[0])
+    size = nxt.shape # sample the data for size
+    safe_size = min(size[0], samplesize)
+    nxt = nxt.sample(safe_size)
+    safe_size = nxt.shape
+    out_generators[0] = itt.chain((nxt,), generators[0]) # return the sampled column for processing
     labels = nxt.index.values
+    
     if kwargs.get('verbose', True): print('LABELS PICKED: ', labels, '\n')
     
     # drop everything not picked in this sampling
-    train = (itt.chain.from_iterable(map(lambda x: x.loc[labels], df) for df in train))
-    test = (itt.chain.from_iterable(map(lambda x: x.loc[labels], df) for df in test))
-    train = itt.chain((nxt,), train) # return the sampled column for processing
-    if DEBUG == '4':
-        print ( ( (next(train)) ) )
-        return (train,)
-
-    # train = ((x.T.values, np.array([x.index.values])) for x in train)
-    # test = ((x.T.values, np.array([x.index.values])) for x in test)
-    train = ((x.T.values) for x in train)
-    test = ((x.T.values) for x in test)
-    if DEBUG == '5':
-        print(next(train), '\n'*3, next(test))
-        return
-    #traing = (zip(train, test))
-    size = train_size
-    mode = kwargs.get('mode', 'train')
-    datagen = {'train': lambda: zip(train, train), 
-            'test': lambda: zip(test, test), 
-            'cross': lambda: zip(train, test),}.get(mode, lambda: None)()
-    return datagen, size, labels
-          
-
+    for i, gen in enumerate(generators):
+        #
+        gen = (map(lambda x: x.loc[labels], gen))
+        gen = (x.T for x in gen)
+        print("NXG: {}".format(next(gen)))
+        out_generators[i] = gen
+    
+    return out_generators, labels, safe_size
+            
 class MenuConfiguration(object):
     def __init__(self, opts=None, **kwargs):
         self.options = coll.OrderedDict()
         # defaults:
-        self.options.update((('train_steps', 75), ('test_steps', 75), ('label_sample_size', 10000), ('list_cwd', False)))
+        self.options.update((('train_steps', 75), ('test_steps', 75), ('label_sample_size', 10000), ('list_cwd', False), ('model_depth', 3)))
         # kwargs are options to use:
         if opts: self.options.update(opts)
         self.options.update(kwargs)
@@ -254,18 +265,20 @@ class SkinApp(object):
     def run_model(self, models=None, verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
         mode = kwargs.get('mode', 'train')
         
-        datagen, size, labels = build_datastreams_gen(xml=xml, txt=txt, dir=dir, mode=mode, 
-                                                      samplesize=self.config.options.get('label_sample_size', 1000),
-                                                      debug=self.config.options.get(self.DBG_MODE, False),
-                                                    )
+        datagen = build_datastreams_gen(xml=xml, txt=txt, dir=dir, mode=mode,
+                                        debug=self.config.options.get(self.DBG_MODE, False)
+                                        )
+                                                    
+        datagen, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
+        #datagen = zip(datagen)
                                               
         mode_func = {'train' : lambda x: x[0].fit_generator(datagen, steps_per_epoch=self.config.options.get('train_steps', 75)),
-                     'test' : lambda x: pd.DataFrame(x[1].predict_generator(datagen, steps=self.config.options.get('test_steps', 75), verbose=1)),
+                     'test' : lambda x: (pd.DataFrame(x[0].predict_generator(datagen, steps=self.config.options.get('test_steps', 75), verbose=1))).T.set_index(labels),
                     }.get(mode)
         
         built_models = [None]
-        if not all(models): built_models = build_models(datashape=size, depth=kwargs.get('depth', 2))
-        models = [x or built_models[i] for (i,x) in enumerate(models)]
+        if models is None or not all(models): built_models = build_models(datashape=size, depth=self.config.options.get('model_depth', 2))
+        models = [x or built_models[i] for (i,x) in enumerate(models or built_models)]
         autoencoder = models[0]
         autoencoder.compile(optimizer='adadelta', loss='binary_crossentropy')
         
@@ -287,9 +300,9 @@ class SkinApp(object):
                         
             if fits:
                 if mode == 'train' and mdl_file is NotImplemented: mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
-                
                 try: result = mode_func(models)
                 except KeyboardInterrupt: fits = 0
+                datagen, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
                 
                 if mdl_file and (not mdl_file is NotImplemented) and (not fits % 10 or 0 <= fits < 10): 
                     try: os.replace(mdl_file, mdl_file+'.backup')
@@ -317,9 +330,13 @@ class SkinApp(object):
                 mainloop = False
             
             if action in self.modes[self.ACT_TRAIN]: 
-                _tmp = self.run_model(*args, models=self.model, verbose=self.config.options.get('verbose'), 
-                                 xml=self.config.options.get('xml'), txt=self.config.options.get('txt'), 
-                                 dir=self.config.options.get('dir'), mode='train', **kwargs)
+                try:
+                    _tmp = self.run_model(*args, models=self.model, verbose=self.config.options.get('verbose'), 
+                                     xml=self.config.options.get('xml'), txt=self.config.options.get('txt'), 
+                                     dir=self.config.options.get('dir'), mode='train', **kwargs)
+                except Exception as Err: 
+                    _tmp = None
+                    sys.excepthook(*sys.exc_info())
                 
                 try: _tmpFN = _tmp[2]
                 except Exception as Err: _tmpFN = None
@@ -334,11 +351,15 @@ class SkinApp(object):
                 self.modelpath = _tmpFN if (_tmp and _tmpFN) else (str(self.model) if _tmp else self.modelpath)
                 
             if action in self.modes[self.ACT_PRED]:
-                _tmp = self.run_model(*args, models=self.model, verbose=self.config.options.get('verbose'), 
+                try:
+                    _tmp = self.run_model(*args, models=self.model, verbose=self.config.options.get('verbose'), 
                                         xml=self.config.options.get('xml'), txt=self.config.options.get('txt'), 
                                         dir=self.config.options.get('dir'), 
                                         mode='test', **kwargs
                                     )
+                except Exception as Err: 
+                    _tmp = None
+                    sys.excepthook(*sys.exc_info())
                 
                 try: _tmpFN = _tmp[2]
                 except Exception as Err: _tmpFN = None
@@ -405,7 +426,7 @@ class SkinApp(object):
                         break
                     
                     try: intable = int(option)
-                    except Exception: intable = False
+                    except Exception as E: intable = False
                     if intable:
                         try: option = tuple(self.config.options.keys())[intable]
                         except Exception as E: print(E)
@@ -414,6 +435,7 @@ class SkinApp(object):
                         newval = input("    - {} => ".format(option))
                         if newval:
                             newval = {'None' : None, 'False' : False, 'True' : True}.get(newval, newval)
+                            newval = int(newval) if newval.isnumeric() else newval
                             self.config.options[option] = newval
                             print(" ")
                 
@@ -427,7 +449,7 @@ class SkinApp(object):
                 except Exception as Err: 
                     print(Err)
                     _tmp = None
-                if _tmp: print(next(_tmp))
+                if _tmp is not None: print((_tmp))
                 
             if action == '!eval':
                 while True:
