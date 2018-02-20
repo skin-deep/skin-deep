@@ -204,7 +204,7 @@ def sample_labels(generators, samplesize=10000, *args, **kwargs):
         #
         gen = (map(lambda x: x.loc[labels], gen))
         gen = (x.T for x in gen)
-        print("NXG: {}".format(next(gen)))
+        #print("NXG: {}".format(next(gen)))
         out_generators[i] = gen
     
     return out_generators, labels, safe_size
@@ -270,10 +270,9 @@ class SkinApp(object):
                                         )
                                                     
         datagen, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
-        #datagen = zip(datagen)
                                               
-        mode_func = {'train' : lambda x: x[0].fit_generator(datagen, steps_per_epoch=self.config.options.get('train_steps', 75)),
-                     'test' : lambda x: (pd.DataFrame(x[0].predict_generator(datagen, steps=self.config.options.get('test_steps', 75), verbose=1))).T.set_index(labels),
+        mode_func = {'train' : lambda x: x[0].fit_generator(zip(datagen[0], datagen[0]), steps_per_epoch=self.config.options.get('train_steps', 75)),
+                     'test' : lambda x: (pd.DataFrame(x[0].predict_generator(zip(datagen[1], datagen[1]), steps=self.config.options.get('test_steps', 75), verbose=1))).T.set_index(labels),
                     }.get(mode)
         
         built_models = [None]
