@@ -14,7 +14,7 @@ def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), 
     # calculate sizes
     try:
         print("DATASHAPE: "+str(datashape))
-        uncompr_size = datashape[0]
+        uncompr_size = datashape[-1]
         compr_size = max(1, (min(uncompr_size, uncompr_size // compression_fac)))
     except (IndexError, TypeError) as E:
         print(E)
@@ -33,10 +33,10 @@ def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), 
     # layers
     inbound = keras.layers.Input(shape=(datashape or [datashape[0]]))
     
-    encoded = keras.layers.Dense(lay_sizes[0], activation=activators[0])(inbound)
+    encoded = keras.layers.Dense(lay_sizes[0], activation=activators[0], input_shape=datashape)(inbound)
     for siz in lay_sizes[1:]: #[0]th is already built
         encoded = keras.layers.Dense(siz, activation=activators[0])(encoded)
-    dummy_in = keras.layers.Input(shape=(tuple([lay_sizes[-2] or lay_sizes[-1]])))  # dummy input for feeding into decoder separately
+    dummy_in = keras.layers.Input(shape=(tuple([lay_sizes[-2]])))  # dummy input for feeding into decoder separately
         
     if deep_lvls > 1:
         decoded = keras.layers.Dense(lay_sizes[-2], activation=activators[1])(encoded)
@@ -192,7 +192,7 @@ def sample_labels(generators, samplesize=10000, *args, **kwargs):
     size = nxt.shape # sample the data for size
     safe_size = min(size[0], samplesize)
     nxt = nxt.sample(safe_size)
-    safe_size = nxt.shape
+    safe_size = nxt.T.shape
     out_generators[0] = itt.chain((nxt,), generators[0]) # return the sampled column for processing
     #labels = nxt[geo.DATA_COLNAME].values
     labels = nxt.index.values
@@ -201,10 +201,9 @@ def sample_labels(generators, samplesize=10000, *args, **kwargs):
     
     # drop everything not picked in this sampling
     for i, gen in enumerate(generators):
-        #
         #gen = (x.set_index(x[geo.DATA_COLNAME].values) for x in gen)
         gen = (map(lambda x: x.loc[labels], gen))
-        gen = (np.asarray(x.values) for x in gen)
+        gen = (np.array([x.T.values]) for x in gen)
         #print("NXG:\n {}".format(next(gen).head()))
         out_generators[i] = gen
     
@@ -286,11 +285,11 @@ class SkinApp(object):
                                                 #validation_data=zip(sampled[1], sampled[1]), validation_steps=self.config.options.get('train_steps', 75), verbose=1,
                                                 steps_per_epoch=self.config.options.get('train_steps', 75), initial_epoch=e-1, epochs=e,
                                             )),
-                     'test' : lambda x, e: (pd.DataFrame(x[0].predict_generator(zip(sampled[1], sampled[1]), steps=self.config.options.get('test_steps', 75), verbose=1)))#.T.set_index(labels),
+                     'test' : lambda x, e: ((x[0].predict_generator(zip(sampled[1], sampled[1]), steps=self.config.options.get('test_steps', 75), verbose=1)))#.T.set_index(labels),
                     }.get(mode)
         
         built_models = [None]
-        #print("SIZE: ", size)
+        print("SIZE: ", size)
         if models is None or not all(models): built_models = build_models(datashape=size, depth=self.config.options.get('model_depth', 2))
         models = [x or built_models[i] for (i,x) in enumerate(models or built_models)]
         autoencoder = models[0]
@@ -314,7 +313,7 @@ class SkinApp(object):
                         
             if fits:
                 if mode == 'train' and mdl_file is NotImplemented: mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
-                print(next(sampled[1]))
+                print("TRAIN INPUT: \n", next(sampled[1]))
                 try: result = mode_func(models, fits)
                 except KeyboardInterrupt: fits = 0
                 #sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
