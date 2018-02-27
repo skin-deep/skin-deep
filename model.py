@@ -5,7 +5,6 @@ import pandas as pd
 import numpy as np
 import itertools as itt
 import collections as coll
-#from pprint import pprint as print
 
 def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), **kwargs):
     import keras
@@ -32,22 +31,21 @@ def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), 
     print(lay_sizes)
 
     # layers
-    inbound = keras.layers.Input(shape=(datashape[:-1] or [datashape[0]]))
-
+    inbound = keras.layers.Input(shape=(datashape or [datashape[0]]))
     
     encoded = keras.layers.Dense(lay_sizes[0], activation=activators[0])(inbound)
     for siz in lay_sizes[1:]: #[0]th is already built
         encoded = keras.layers.Dense(siz, activation=activators[0])(encoded)
-    dummy_in = keras.layers.Input(shape=[lay_sizes[-2] or lay_sizes[-1]])  # dummy input for feeding into decoder separately
+    dummy_in = keras.layers.Input(shape=(tuple([lay_sizes[-2] or lay_sizes[-1]])))  # dummy input for feeding into decoder separately
         
     if deep_lvls > 1:
         decoded = keras.layers.Dense(lay_sizes[-2], activation=activators[1])(encoded)
         for siz in lay_sizes[-3:0:-1]:
             decoded = keras.layers.Dense(siz, activation=activators[0])(decoded)
         # let's make sure the last layer is 1:1 to input no matter what
-        decoded = keras.layers.Dense(uncompr_size, activation=activators[0])(decoded)
+        decoded = keras.layers.Dense(datashape[-1], activation=activators[0])(decoded)
     else:
-        decoded = keras.layers.Dense(uncompr_size, activation=activators[0])(encoded)
+        decoded = keras.layers.Dense(datashape[-1], activation=activators[0])(encoded)
         
     # models
     encoder = Model(inbound, encoded)
@@ -133,7 +131,7 @@ def load_model(*args, model_path=NotImplemented, **kwargs):
             print("\n\nModel could not be loaded from path {}!".format(loaded_path))
         return model, loaded_path
           
-def build_datastreams_gen(xml=None, txt=None, dir=None, **kwargs):
+def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
     DEBUG = kwargs.get('debug', False)
     if DEBUG: DEBUG = str(DEBUG).strip()
     dir = os.getcwd() if not dir else (dir if os.path.isabs(dir) else os.path.join(os.getcwd(), dir))
@@ -166,14 +164,14 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, **kwargs):
         print ( ( (next(train)) ) )
         return (next(train))
     
-    drop_label = True
+    drop_label = drop_labels
     retrieve_df = ((lambda x: x[1]) if drop_label 
-                    else (lambda pair: pair[1].assign(Label=np.array(pair[0]))))
+                    else (lambda pair: pd.DataFrame(data=pair[1]).rename_axis([pair[0]], axis=1)))
     train = ((map(retrieve_df, df)) for df in train)
     test = ((map(retrieve_df, df)) for df in test)
     if DEBUG == '4':
-        print ( ( (next(train)) ) )
-        return (next(train))
+        print (tuple(next(train)))
+        return tuple(next(train))
 
     train = (x for x in itt.chain.from_iterable(train))
     test = (x for x in itt.chain.from_iterable(test))
@@ -190,11 +188,13 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, **kwargs):
 def sample_labels(generators, samplesize=10000, *args, **kwargs):
     out_generators = [None for _ in range(len(generators))]
     nxt = next(generators[0])
+    print(nxt)
     size = nxt.shape # sample the data for size
     safe_size = min(size[0], samplesize)
     nxt = nxt.sample(safe_size)
     safe_size = nxt.shape
     out_generators[0] = itt.chain((nxt,), generators[0]) # return the sampled column for processing
+    #labels = nxt[geo.DATA_COLNAME].values
     labels = nxt.index.values
     
     if kwargs.get('verbose', True): print('LABELS PICKED: ', labels, '\n')
@@ -202,9 +202,10 @@ def sample_labels(generators, samplesize=10000, *args, **kwargs):
     # drop everything not picked in this sampling
     for i, gen in enumerate(generators):
         #
+        #gen = (x.set_index(x[geo.DATA_COLNAME].values) for x in gen)
         gen = (map(lambda x: x.loc[labels], gen))
-        gen = (x.T for x in gen)
-        #print("NXG: {}".format(next(gen)))
+        gen = (np.asarray(x.values) for x in gen)
+        #print("NXG:\n {}".format(next(gen).head()))
         out_generators[i] = gen
     
     return out_generators, labels, safe_size
@@ -213,10 +214,18 @@ class MenuConfiguration(object):
     def __init__(self, opts=None, **kwargs):
         self.options = coll.OrderedDict()
         # defaults:
-        self.options.update((('train_steps', 75), ('test_steps', 75), ('label_sample_size', 10000), ('list_cwd', False), ('model_depth', 3)))
+        self.options.update((
+            ('train_steps', 75), 
+            ('test_steps', 5), 
+            ('label_sample_size', 10000), 
+            ('list_cwd', False), 
+            ('model_depth', 2), 
+            ('drop_labels', False),
+        ))
         # kwargs are options to use:
         if opts: self.options.update(opts)
         self.options.update(kwargs)
+        # TODO: clean up the kwargs
         
 
 class SkinApp(object):    
@@ -265,17 +274,23 @@ class SkinApp(object):
     def run_model(self, models=None, verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
         mode = kwargs.get('mode', 'train')
         
-        datagen = build_datastreams_gen(xml=xml, txt=txt, dir=dir, mode=mode,
-                                        debug=self.config.options.get(self.DBG_MODE, False)
+        datagen = build_datastreams_gen(xml=xml, txt=txt, dir=dir, 
+                                        mode=mode, debug=False,
+                                        drop_labels=self.config.options.get('drop_labels', False),
                                         )
                                                     
-        datagen, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
+        sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
+        #raise Exception(next(sampled[0]))
                                               
-        mode_func = {'train' : lambda x: x[0].fit_generator(zip(datagen[0], datagen[0]), steps_per_epoch=self.config.options.get('train_steps', 75)),
-                     'test' : lambda x: (pd.DataFrame(x[0].predict_generator(zip(datagen[1], datagen[1]), steps=self.config.options.get('test_steps', 75), verbose=1))).T.set_index(labels),
+        mode_func = {'train' : lambda x, e: (x[0].fit_generator(zip(sampled[0], sampled[0]), 
+                                                #validation_data=zip(sampled[1], sampled[1]), validation_steps=self.config.options.get('train_steps', 75), verbose=1,
+                                                steps_per_epoch=self.config.options.get('train_steps', 75), initial_epoch=e-1, epochs=e,
+                                            )),
+                     'test' : lambda x, e: (pd.DataFrame(x[0].predict_generator(zip(sampled[1], sampled[1]), steps=self.config.options.get('test_steps', 75), verbose=1)))#.T.set_index(labels),
                     }.get(mode)
         
         built_models = [None]
+        #print("SIZE: ", size)
         if models is None or not all(models): built_models = build_models(datashape=size, depth=self.config.options.get('model_depth', 2))
         models = [x or built_models[i] for (i,x) in enumerate(models or built_models)]
         autoencoder = models[0]
@@ -299,9 +314,10 @@ class SkinApp(object):
                         
             if fits:
                 if mode == 'train' and mdl_file is NotImplemented: mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
-                try: result = mode_func(models)
+                print(next(sampled[1]))
+                try: result = mode_func(models, fits)
                 except KeyboardInterrupt: fits = 0
-                datagen, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
+                #sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
                 
                 if mdl_file and (not mdl_file is NotImplemented) and (not fits % 10 or 0 <= fits < 10): 
                     try: os.replace(mdl_file, mdl_file+'.backup')
@@ -316,23 +332,26 @@ class SkinApp(object):
 
     def run(self, *args, **kwargs):
         mainloop = True
+        actionqueque = coll.deque(kwargs.get('cmd') or [NotImplemented])
         action = NotImplemented
         while mainloop:
             prompt = self.baseprompt.format(mdl=(('\n Currently loaded model: '+ str(self.modelpath))))
             if not action: 
                 prompt = '>>> '
                 action = NotImplemented
-            try:
-                action = input(prompt).lower()
-            except (KeyboardInterrupt, EOFError):
-                action = None
-                mainloop = False
+            if not actionqueque:
+                try: actionqueque.extend(input(prompt).lower().split())
+                except (KeyboardInterrupt, EOFError):
+                    action = None
+                    mainloop = False
+            try: action = str(actionqueque.popleft()).lower()
+            except IndexError: action = None
             
             if action in self.modes[self.ACT_TRAIN]: 
                 try:
                     _tmp = self.run_model(*args, models=self.model, verbose=self.config.options.get('verbose'), 
                                      xml=self.config.options.get('xml'), txt=self.config.options.get('txt'), 
-                                     dir=self.config.options.get('dir'), mode='train', **kwargs)
+                                     dir=self.config.options.get('dir'), mode='train',  **kwargs)
                 except Exception as Err: 
                     _tmp = None
                     sys.excepthook(*sys.exc_info())
@@ -433,8 +452,9 @@ class SkinApp(object):
                     if option in self.config.options:
                         newval = input("    - {} => ".format(option))
                         if newval:
-                            newval = {'None' : None, 'False' : False, 'True' : True}.get(newval, newval)
-                            newval = int(newval) if newval.isnumeric() else newval
+                            evaluables = {'None' : None, 'False' : False, 'True' : True}
+                            if newval in evaluables: newval = evaluables[newval]
+                            else: newval = int(newval) if newval.isnumeric() else newval
                             self.config.options[option] = newval
                             print(" ")
                 
@@ -465,7 +485,7 @@ class SkinApp(object):
     
 def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     app_instance = SkinApp(*args, verbose=verbose, xml=xml, txt=txt, dir=dir, **kwargs)
-    app_instance.run()
+    app_instance.run(*args, **kwargs)
     
 if __name__ == '__main__':
     print(' ')
@@ -474,6 +494,7 @@ if __name__ == '__main__':
     argparser.add_argument('--xml')
     argparser.add_argument('--txt')
     argparser.add_argument('--dir')
+    argparser.add_argument('--cmd', nargs='*')
     argparser.add_argument('-v', '--verbose', action='store_true')
     args = vars(argparser.parse_args())
     args['dir'] = args['dir'] or 'mag'

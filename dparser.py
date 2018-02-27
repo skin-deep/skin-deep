@@ -93,7 +93,6 @@ def clean_data(raw_data):
     for datum in raw_data:
         cleaned = datum
         cleaned = cleaned.set_index(DATA_COLNAME)
-        #cleaned = cleaned.transpose()
         yield cleaned
 
 # Higher-level logic for integration
@@ -106,6 +105,7 @@ def txt_pipeline(path=None, *args, **kwargs):
     raw_data = parse_datasets(path or '*.txt', *args, **kwargs)
     cleaned = clean_data(raw_data)
     return cleaned
+    return raw_data #debugging purposes
     
 def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs):
     xmls = xml_pipeline(path=xml_path, *args, **kwargs)
