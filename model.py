@@ -203,8 +203,9 @@ def sample_labels(generators, samplesize=10000, *args, **kwargs):
     for i, gen in enumerate(generators):
         #gen = (x.set_index(x[geo.DATA_COLNAME].values) for x in gen)
         gen = (map(lambda x: x.loc[labels], gen))
-        gen = (np.array([x.T.values]) for x in gen)
-        #print("NXG:\n {}".format(next(gen).head()))
+        gen = (x.T for x in gen)
+        #gen = (np.asarray(x.values) for x in gen)
+        #print("NXG:\n {}".format(next(gen))
         out_generators[i] = gen
     
     return out_generators, labels, safe_size
@@ -280,12 +281,28 @@ class SkinApp(object):
                                                     
         sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
         #raise Exception(next(sampled[0]))
-                                              
-        mode_func = {'train' : lambda x, e: (x[0].fit_generator(zip(sampled[0], sampled[0]), 
+        #return None, next(sampled[0], 'OI!'), None
+        
+        def predfunc(models):
+            batch = next(sampled[0])
+            prediction = models[0].predict_on_batch(np.asarray([batch.values]))
+            prediction = pd.DataFrame(prediction[0])
+            prediction = prediction.T.set_index(labels)
+            prediction = prediction.rename(columns={0 : "{} ({})".format(batch.index[0], batch.index.name)})
+            return prediction
+            
+        def trainfunc(models, e):
+            batchgen = (np.asarray([x.values]) for x in sampled[0])
+            history = models[0].fit_generator(zip(batchgen, batchgen), steps_per_epoch=self.config.options.get('train_steps', 75), initial_epoch=e-1, epochs=e)
+            return history
+            
+        mode_func = {'trainOLD' : lambda x, e: (x[0].fit_generator(zip(sampled[0], sampled[0]), 
                                                 #validation_data=zip(sampled[1], sampled[1]), validation_steps=self.config.options.get('train_steps', 75), verbose=1,
                                                 steps_per_epoch=self.config.options.get('train_steps', 75), initial_epoch=e-1, epochs=e,
                                             )),
-                     'test' : lambda x, e: ((x[0].predict_generator(zip(sampled[1], sampled[1]), steps=self.config.options.get('test_steps', 75), verbose=1)))#.T.set_index(labels),
+                     'test': lambda x, e: (predfunc(x)),
+                     'train': lambda x, e: (trainfunc(x, e)),
+                     'testOLD' : lambda x, e: ((x[0].predict_generator(zip(sampled[1], sampled[1]), steps=self.config.options.get('test_steps', 75), verbose=1)))#.T.set_index(labels),
                     }.get(mode)
         
         built_models = [None]
@@ -312,11 +329,14 @@ class SkinApp(object):
                         print("Invalid input. Try again.")
                         
             if fits:
-                if mode == 'train' and mdl_file is NotImplemented: mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
-                print("TRAIN INPUT: \n", next(sampled[1]))
-                try: result = mode_func(models, fits)
+                if mode == 'train' and mdl_file is NotImplemented: 
+                    mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
+                    print("TRAIN INPUT: \n", next(sampled[1]))
+                try:
+                    if result is None or mode=='train': result = mode_func(models, fits)
+                    else: result = result.join(mode_func(models, fits), how='outer', rsuffix='-REP')
                 except KeyboardInterrupt: fits = 0
-                #sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
+                sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
                 
                 if mdl_file and (not mdl_file is NotImplemented) and (not fits % 10 or 0 <= fits < 10): 
                     try: os.replace(mdl_file, mdl_file+'.backup')
