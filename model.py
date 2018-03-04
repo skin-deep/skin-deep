@@ -333,8 +333,11 @@ class SkinApp(object):
                     mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
                     print("TRAIN INPUT: \n", next(sampled[1]))
                 try:
-                    if result is None or mode=='train': result = mode_func(models, fits)
-                    else: result = result.join(mode_func(models, fits), how='outer', rsuffix='-REP')
+                    fitting = mode_func(models, fits)
+                    if result is None or mode=='train': result = fitting
+                    else: 
+                        try: result = result.combine_first(fitting)
+                        except Exception: result = result.join(mode_func(models, fits), how='outer', rsuffix='-REP')
                 except KeyboardInterrupt: fits = 0
                 sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
                 
