@@ -313,7 +313,7 @@ class SkinApp(object):
         autoencoder.compile(optimizer='adadelta', loss='binary_crossentropy')
         
         fits = 1
-        mdl_file = NotImplemented
+        savepath = NotImplemented
         result = None
         while fits:
             fits -= 1
@@ -329,11 +329,11 @@ class SkinApp(object):
                         print("Invalid input. Try again.")
                         
             if fits:
-                if mode == 'train' and mdl_file is NotImplemented: 
-                    mdl_file = input("If you want to save the model, enter the filename of file to save it to: ")
-                    print("TRAIN INPUT: \n", next(sampled[1]))
+                if savepath is NotImplemented: 
+                    savepath = input("If you want to save the model, enter the filename of file to save it to: ")
                 try:
                     fitting = mode_func(models, fits)
+                    print("\nRuns remaining: {}".format(fits))
                     if result is None or mode=='train': result = fitting
                     else: 
                         try: result = result.combine_first(fitting)
@@ -341,15 +341,16 @@ class SkinApp(object):
                 except KeyboardInterrupt: fits = 0
                 sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
                 
-                if mdl_file and (not mdl_file is NotImplemented) and (not fits % 10 or 0 <= fits < 10): 
-                    try: os.replace(mdl_file, mdl_file+'.backup')
+                if savepath and (not savepath is NotImplemented) and (not fits % 10 or 0 <= fits < 10): 
+                    try: os.replace(savepath, savepath+'.backup')
                     except Exception: pass
                     
-                    autoencoder.save(mdl_file)
+                    if mode == 'train': autoencoder.save(savepath)
+                    if mode == 'test': result.to_csv(savepath)
                     
-            else: mdl_file = None if mdl_file is NotImplemented else mdl_file
+            else: savepath = None if savepath is NotImplemented else savepath
         
-        return (models, result, mdl_file)
+        return (models, result, savepath)
 
 
     def run(self, *args, **kwargs):

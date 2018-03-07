@@ -87,7 +87,7 @@ def get_patient_type(dframe):
     """Retrieves the label of the sample type from the Title field and returns it as a (new) dataframe."""
     #return dframe['Title']
     #print('TITLE IS: {}'.format(dframe['Title']))
-    return dframe.transform({'Title' : lambda x: x.split('_')[2]}) # 2 for mag, 1 for mag2
+    return dframe.transform({'Title' : lambda x: x.split('_')[-2]}) # 2 for mag, 1 for mag2
 
 def clean_data(raw_data):
     for datum in raw_data:
