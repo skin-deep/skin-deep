@@ -204,8 +204,9 @@ def sample_labels(generators, samplesize=10000, *args, **kwargs):
         #gen = (x.set_index(x[geo.DATA_COLNAME].values) for x in gen)
         gen = (map(lambda x: x.loc[labels], gen))
         gen = (x.T for x in gen)
+        gen = (x.rename({v : x.index.name for v in x.index.values}) for x in gen)
         #gen = (np.asarray(x.values) for x in gen)
-        #print("NXG:\n {}".format(next(gen))
+        #print("NXG:\n {}".format(next(gen).index))
         out_generators[i] = gen
     
     return out_generators, labels, safe_size
