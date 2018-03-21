@@ -33,24 +33,28 @@ def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), 
     # layers
     inbound = keras.layers.Input(shape=(datashape or [datashape[0]]))
     
-    encoded = keras.layers.Dense(lay_sizes[0], activation=activators[0], input_shape=datashape)(inbound)
-    for siz in lay_sizes[1:]: #[0]th is already built
-        encoded = keras.layers.Dense(siz, activation=activators[0])(encoded)
+    encoded = keras.layers.Dense(lay_sizes[0], activation=activators[0], input_shape=datashape, name='encoder_0')(inbound)
+    for (i, siz) in enumerate(lay_sizes[1:]): #[0]th is already built
+        encoded = keras.layers.Dense(siz, activation=activators[0], name='encoder_{}'.format(i+1))(encoded)
     dummy_in = keras.layers.Input(shape=(tuple([lay_sizes[-2]])))  # dummy input for feeding into decoder separately
         
     if deep_lvls > 1:
-        decoded = keras.layers.Dense(lay_sizes[-2], activation=activators[1])(encoded)
-        for siz in lay_sizes[-3:0:-1]:
-            decoded = keras.layers.Dense(siz, activation=activators[0])(decoded)
+        decoded = keras.layers.Dense(lay_sizes[-2], activation=activators[1], name='decoder_0')(encoded)
+        for (i, siz) in enumerate(lay_sizes[-3:0:-1]):
+            decoded = keras.layers.Dense(siz, activation=activators[1], name='decoder_{}'.format(i+1))(decoded)
         # let's make sure the last layer is 1:1 to input no matter what
-        decoded = keras.layers.Dense(datashape[-1], activation=activators[0])(decoded)
+        decoded = keras.layers.Dense(datashape[-1], activation=activators[1], name='decoder_{}'.format(len(lay_sizes)))(decoded)
     else:
-        decoded = keras.layers.Dense(datashape[-1], activation=activators[0])(encoded)
+        decoded = keras.layers.Dense(datashape[-1], activation=activators[1], name='decoder_{}'.format(len(lay_sizes)))(encoded)
         
     # models
     encoder = Model(inbound, encoded)
     autoencoder = Model(inbound, decoded)
     decoder = Model(dummy_in, autoencoder.layers[-1](dummy_in))
+    
+    # store the subcomponents for easy retrieval when loaded
+    autoencoder.encoder = encoder
+    autoencoder.decoder = decoder
 
     return (autoencoder, encoder, decoder)
 
@@ -185,11 +189,12 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
             'cross': lambda: (train, test),}.get(mode, lambda: None)()
     return datagen
           
-def sample_labels(generators, samplesize=10000, *args, **kwargs):
+def sample_labels(generators, samplesize=None, *args, **kwargs):
     out_generators = [None for _ in range(len(generators))]
     nxt = next(generators[0])
-    print(nxt)
+    #print(nxt)
     size = nxt.shape # sample the data for size
+    samplesize = samplesize or size[0] # None input - do not subsample
     safe_size = min(size[0], samplesize)
     nxt = nxt.sample(safe_size)
     safe_size = nxt.T.shape
@@ -202,11 +207,13 @@ def sample_labels(generators, samplesize=10000, *args, **kwargs):
     # drop everything not picked in this sampling
     for i, gen in enumerate(generators):
         #gen = (x.set_index(x[geo.DATA_COLNAME].values) for x in gen)
-        gen = (map(lambda x: x.loc[labels], gen))
-        gen = (x.T for x in gen)
-        gen = (x.rename({v : x.index.name for v in x.index.values}) for x in gen)
-        #gen = (np.asarray(x.values) for x in gen)
-        #print("NXG:\n {}".format(next(gen).index))
+        try:
+            gen = (map(lambda x: x.loc[labels], gen))
+            gen = (x.T for x in gen)
+            gen = (x.rename({v : x.index.name for v in x.index.values}) for x in gen)
+            #gen = (np.asarray(x.values) for x in gen)
+            #print("NXG:\n {}".format(next(gen).index))
+        except ValueError: pass
         out_generators[i] = gen
     
     return out_generators, labels, safe_size
@@ -222,6 +229,7 @@ class MenuConfiguration(object):
             ('list_cwd', False), 
             ('model_depth', 2), 
             ('drop_labels', False),
+            ('compression_fac', 16),
         ))
         # kwargs are options to use:
         if opts: self.options.update(opts)
@@ -282,7 +290,6 @@ class SkinApp(object):
                                                     
         sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
         #raise Exception(next(sampled[0]))
-        #return None, next(sampled[0], 'OI!'), None
         
         def predfunc(models):
             batch = next(sampled[0])
@@ -294,21 +301,27 @@ class SkinApp(object):
             
         def trainfunc(models, e):
             batchgen = (np.asarray([x.values]) for x in sampled[0])
-            history = models[0].fit_generator(zip(batchgen, batchgen), steps_per_epoch=self.config.options.get('train_steps', 75), initial_epoch=e-1, epochs=e)
+            validgen = itt.cycle([np.asarray([next(sampled[1]).values]) for x in range(self.config.options.get('train_steps', 75))])
+            history = models[0].fit_generator(zip(((batch + 0.25 * np.random.normal(size=size)) for batch in batchgen), batchgen), 
+                                              steps_per_epoch=self.config.options.get('train_steps', 75), 
+                                              initial_epoch=e-1, epochs=e,
+                                              validation_data=zip(validgen, validgen),
+                                              validation_steps=self.config.options.get('train_steps', 75)
+                                              )
             return history
             
-        mode_func = {'trainOLD' : lambda x, e: (x[0].fit_generator(zip(sampled[0], sampled[0]), 
-                                                #validation_data=zip(sampled[1], sampled[1]), validation_steps=self.config.options.get('train_steps', 75), verbose=1,
-                                                steps_per_epoch=self.config.options.get('train_steps', 75), initial_epoch=e-1, epochs=e,
-                                            )),
-                     'test': lambda x, e: (predfunc(x)),
+        mode_func = {'test': lambda x, e: (predfunc(x)),
                      'train': lambda x, e: (trainfunc(x, e)),
-                     'testOLD' : lambda x, e: ((x[0].predict_generator(zip(sampled[1], sampled[1]), steps=self.config.options.get('test_steps', 75), verbose=1)))#.T.set_index(labels),
                     }.get(mode)
         
         built_models = [None]
         print("SIZE: ", size)
-        if models is None or not all(models): built_models = build_models(datashape=size, depth=self.config.options.get('model_depth', 2))
+        if models is None or not all(models): built_models = build_models(datashape=size, 
+                                                                          compression_fac=self.config.options.get('compression_fac', 32), 
+                                                                          depth=self.config.options.get('model_depth', 2),
+                                                                          activators=('selu', 'sigmoid')
+                                                                          )
+        #if len(models)>0 and hasattr(models[0], 'layers'): models = [x or models[0]
         models = [x or built_models[i] for (i,x) in enumerate(models or built_models)]
         autoencoder = models[0]
         autoencoder.compile(optimizer='adadelta', loss='binary_crossentropy')
@@ -331,13 +344,13 @@ class SkinApp(object):
                         
             if fits:
                 if savepath is NotImplemented: 
-                    savepath = input("If you want to save the model, enter the filename of file to save it to: ")
+                    savepath = input("If you want to save the result, enter the filename of file to save it to: ")
                 try:
                     fitting = mode_func(models, fits)
                     print("\nRuns remaining: {}".format(fits))
                     if result is None or mode=='train': result = fitting
                     else: 
-                        try: result = result.combine_first(fitting)
+                        try: result = result[result!=0].combine_first(fitting).fillna(0)
                         except Exception: result = result.join(mode_func(models, fits), how='outer', rsuffix='-REP')
                 except KeyboardInterrupt: fits = 0
                 sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
