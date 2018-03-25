@@ -1,9 +1,10 @@
 import glob
 import pickle
-import os, os.path, sys
+import os, sys
 import pandas as pd
 import numpy as np
 import xml.etree.ElementTree as ET
+import itertools as itt
 import re
 
 DATA_COLNAME = 'Target'
@@ -134,6 +135,160 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
    
     print("\nFound {} datafiles. \n".format(count))
         
+        
+
+def fetch_batch(stream, batch_size=10, aggregator=list, *args, **kwargs):
+    """A generic buffer that reads and yields N values from a passed generator as an iterable.
+    If the stream ends prematurely, returns however many elements could were read.
+    
+    :param stream: a generator or any another object supporting the next() protocol
+    :param batch_size: optional; how many values should be fetched, defaults to 10. send() arguments can change its value
+    :param aggregator: optional; callable constructor for the iterable type to return data in. 
+                                 args and kwargs are passed as the arguments of the call. Default: list
+    """
+    bsize = batch_size
+    batch = aggregator(*args, **kwargs)
+    while stream:
+        batch = aggregator(*args, **kwargs)
+        for _ in range(batch_size):
+            try: batch += aggregator((next(stream),))
+            except StopIteration: 
+                stream = False
+                break
+        bsize = yield batch
+        
+def split_data(batches, test_to_train=0.2, shuffle=True):
+    batches = itt.cycle(batches)
+    for raw_data in batches:
+        if not raw_data: continue
+        data = raw_data.copy()
+        if shuffle: 
+            from random import shuffle as randshuffle
+            randshuffle(data)
+        #data = (map(lambda x: pd.DataFrame.from_dict(x, orient='index'), data))
+        
+        # split data:
+        batch_size = len(data)
+        ratio = abs(test_to_train)
+        ratio = ratio if ratio <= 1 else ratio / 100 # accept percentages as ints too
+        test_size = (batch_size * ratio) // 1
+
+        train, test = itt.chain({}), itt.chain({})
+        if batch_size > 1:
+            # we know there's at least one element from an earlier check
+            for i,x in enumerate(data[1::2]):
+                # alternating split to be on the safe side
+                if i < test_size: test = itt.chain(test, [x])
+                else: train = itt.chain(train, [x])
+            train = itt.chain(train, itt.islice(data, 0, None, 2))
+
+        yield train
+        yield test
+        
+def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
+    #dir = os.getcwd() if not dir else (dir if os.path.isabs(dir) else os.path.join(os.getcwd(), dir))
+    distype = 'NN'
+    dir = r'D:\GitHub\skin-deep\!Partitioned\' + distype
+    files = glob.iglob(os.path.join(dir, '*.csv'))
+    gen = (pd.DataFrame.from_csv(csvfile).rename(csvfile) for csvfile in files)
+    gen = (df.rename(distype) for df in gen)
+    gen = itt.cycle(gen)
+    return [gen, gen]
+        
+        
+def build_datastreams_gen2(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
+    DEBUG = kwargs.get('debug', False)
+    if DEBUG: DEBUG = str(DEBUG).strip()
+    dir = os.getcwd() if not dir else (dir if os.path.isabs(dir) else os.path.join(os.getcwd(), dir))
+    xml = xml or os.path.join(dir, '*.xml')
+    txt = txt or os.path.join(dir, '*.txt')
+
+    # prepare 
+    datastream = combo_pipeline(xml_path=xml, txt_path=txt)
+    batches = fetch_batch(datastream)
+    if DEBUG == '1':
+        print(next(batches))
+        return next(batches)
+    
+    train_test_splitter = split_data(batches)
+    train_files, test_files = itt.tee(train_test_splitter)
+    
+    train_files = itt.chain.from_iterable(itt.islice(train_files, 0, None, 2))
+    test_files = itt.chain.from_iterable(itt.islice(test_files, 1, None, 2))
+    if DEBUG == '2':
+        print(next(train_files), '\n\n', next(test_files))
+        return next(train_files)
+    
+    # load values for each accession:
+    def get_file_data(f):
+        return next(txt_pipeline(os.path.join(dir, f + '*')))
+        
+    train = (tuple(zip(x, map(get_file_data, x.values()))) for x in train_files)
+    test = (tuple(zip(x, map(get_file_data, x.values()))) for x in test_files)
+    if DEBUG == '3':
+        print ( ( (next(train)) ) )
+        return (next(train))
+    
+    drop_label = drop_labels
+    retrieve_df = ((lambda x: x[1]) if drop_label 
+                    else (lambda pair: pd.DataFrame(data=pair[1]).rename_axis([pair[0]], axis=1)))
+    train = ((map(retrieve_df, df)) for df in train)
+    test = ((map(retrieve_df, df)) for df in test)
+    if DEBUG == '4':
+        print (tuple(next(train)))
+        return tuple(next(train))
+
+    train = (x for x in itt.chain.from_iterable(train))
+    test = (x for x in itt.chain.from_iterable(test))
+    if DEBUG == '5':
+        ntrain = next(train)
+        print(ntrain, '\n'*3, next(test))
+        return (ntrain)
+        
+    if DEBUG == 'SAVE':
+        for x in range(100):
+            ntrain = next(train)
+            savepath = '{}/!Partitioned/{}'.format(os.getcwd(), ntrain.columns.name)
+            if not os.path.exists(savepath): os.makedirs(savepath)
+            savepath += '/{}.csv'.format(ntrain.columns.values[0])
+            if os.path.exists(savepath): print("Repeated value!")
+            else: ntrain.to_csv(savepath)
+        return (ntrain)
+        
+    mode = kwargs.get('mode', 'train')
+    datagen = {'train': lambda: (train, train), 
+            'test': lambda: (test, test), 
+            'cross': lambda: (train, test),}.get(mode, lambda: None)()
+    return datagen
+    
+def sample_labels(generators, samplesize=None, *args, **kwargs):
+    out_generators = [None for _ in range(len(generators))]
+    nxt = next(generators[0])
+    #print(nxt)
+    size = nxt.shape # sample the data for size
+    samplesize = samplesize or size[0] # None input - do not subsample
+    safe_size = min(size[0], samplesize)
+    nxt = nxt.sample(safe_size)
+    safe_size = nxt.T.shape
+    out_generators[0] = itt.chain((nxt,), generators[0]) # return the sampled column for processing
+    #labels = nxt[geo.DATA_COLNAME].values
+    labels = nxt.index.values
+    
+    if kwargs.get('verbose', True): print('LABELS PICKED: ', labels, '\n')
+    
+    # drop everything not picked in this sampling
+    for i, gen in enumerate(generators):
+        #gen = (x.set_index(x[geo.DATA_COLNAME].values) for x in gen)
+        try:
+            gen = (map(lambda x: x.loc[labels], gen))
+            gen = (x.T for x in gen)
+            gen = (x.rename({v : x.index.name for v in x.index.values}) for x in gen)
+            #gen = (np.asarray(x.values) for x in gen)
+            #print("NXG:\n {}".format(next(gen).index))
+        except ValueError: pass
+        out_generators[i] = gen
+    
+    return out_generators, labels, safe_size
 
 def main(xml=None, txt=None, verbose=None, *args, **kwargs):
     data = combo_pipeline(xml_path=xml, txt_path=txt, verbose=verbose)

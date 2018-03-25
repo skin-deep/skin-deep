@@ -5,106 +5,18 @@ import pandas as pd
 import numpy as np
 import itertools as itt
 import collections as coll
+import matplotlib.pyplot as plt
+from importlib import reload as Reimport
+Models = NotImplemented # deferred loading to save on keras bootup time; module-scope mostly for reloads
 
-def build_models(datashape, compression_fac=32, activators=('relu', 'sigmoid'), **kwargs):
-    import keras
-    # A bit more unorthodox than from m import as...
-    Model = keras.models.Model
-    
-    # calculate sizes
-    try:
-        print("DATASHAPE: "+str(datashape))
-        uncompr_size = datashape[-1]
-        compr_size = max(1, (min(uncompr_size, uncompr_size // compression_fac)))
-    except (IndexError, TypeError) as E:
-        print(E)
-        uncompr_size = None
-        compr_size = compression_fac
-        
-    # deep levels handling:
-    deep_lvls = kwargs.get('depth', 1)
-    try: deep_lvls = max(1, abs(int(deep_lvls)))
-    except Exception: deep_lvls = 1
-    
-    clamp_size = lambda S: max(1, min(S, uncompr_size-1))
-    lay_sizes = [clamp_size(compr_size * (2**lvl)) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
-    print(lay_sizes)
+# option keys
+LABEL_SAMPLE_SIZE = 'label_sample_size'
 
-    # layers
-    inbound = keras.layers.Input(shape=(datashape or [datashape[0]]))
-    
-    encoded = keras.layers.Dense(lay_sizes[0], activation=activators[0], input_shape=datashape, name='encoder_0')(inbound)
-    for (i, siz) in enumerate(lay_sizes[1:]): #[0]th is already built
-        encoded = keras.layers.Dense(siz, activation=activators[0], name='encoder_{}'.format(i+1))(encoded)
-    dummy_in = keras.layers.Input(shape=(tuple([lay_sizes[-2]])))  # dummy input for feeding into decoder separately
-        
-    if deep_lvls > 1:
-        decoded = keras.layers.Dense(lay_sizes[-2], activation=activators[1], name='decoder_0')(encoded)
-        for (i, siz) in enumerate(lay_sizes[-3:0:-1]):
-            decoded = keras.layers.Dense(siz, activation=activators[1], name='decoder_{}'.format(i+1))(decoded)
-        # let's make sure the last layer is 1:1 to input no matter what
-        decoded = keras.layers.Dense(datashape[-1], activation=activators[1], name='decoder_{}'.format(len(lay_sizes)))(decoded)
-    else:
-        decoded = keras.layers.Dense(datashape[-1], activation=activators[1], name='decoder_{}'.format(len(lay_sizes)))(encoded)
-        
-    # models
-    encoder = Model(inbound, encoded)
-    autoencoder = Model(inbound, decoded)
-    decoder = Model(dummy_in, autoencoder.layers[-1](dummy_in))
-    
-    # store the subcomponents for easy retrieval when loaded
-    autoencoder.encoder = encoder
-    autoencoder.decoder = decoder
-
-    return (autoencoder, encoder, decoder)
-
-def fetch_batch(stream, batch_size=10, aggregator=list, *args, **kwargs):
-    """A generic buffer that reads and yields N values from a passed generator as an iterable.
-    If the stream ends prematurely, returns however many elements could were read.
-    
-    :param stream: a generator or any another object supporting the next() protocol
-    :param batch_size: optional; how many values should be fetched, defaults to 10. send() arguments can change its value
-    :param aggregator: optional; callable constructor for the iterable type to return data in. 
-                                 args and kwargs are passed as the arguments of the call. Default: list
-    """
-    bsize = batch_size
-    batch = aggregator(*args, **kwargs)
-    while stream:
-        batch = aggregator(*args, **kwargs)
-        for _ in range(batch_size):
-            try: batch += aggregator((next(stream),))
-            except StopIteration: 
-                stream = False
-                break
-        bsize = yield batch
-        
-def split_data(batches, test_to_train=0.2, shuffle=True):
-    batches = itt.cycle(batches)
-    for raw_data in batches:
-        if not raw_data: continue
-        data = raw_data.copy()
-        if shuffle: 
-            from random import shuffle as randshuffle
-            randshuffle(data)
-        #data = (map(lambda x: pd.DataFrame.from_dict(x, orient='index'), data))
-        
-        # split data:
-        batch_size = len(data)
-        ratio = abs(test_to_train)
-        ratio = ratio if ratio <= 1 else ratio / 100 # accept percentages as ints too
-        test_size = (batch_size * ratio) // 1
-
-        train, test = itt.chain({}), itt.chain({})
-        if batch_size > 1:
-            # we know there's at least one element from an earlier check
-            for i,x in enumerate(data[1::2]):
-                # alternating split to be on the safe side
-                if i < test_size: test = itt.chain(test, [x])
-                else: train = itt.chain(train, [x])
-            train = itt.chain(train, itt.islice(data, 0, None, 2))
-
-        yield train
-        yield test
+def build_models(datashape, compression_fac=32, activators=('selu', 'sigmoid'), **kwargs):
+    try: Reimport(models)
+    except (NameError, TypeError): import models
+    Models = models
+    return Models.build_models(datashape, compression_fac=32, activators=('selu', 'sigmoid'), **kwargs)
                    
 def load_model(*args, model_path=NotImplemented, **kwargs):
     model, loaded_path = None, None
@@ -135,88 +47,6 @@ def load_model(*args, model_path=NotImplemented, **kwargs):
             print("\n\nModel could not be loaded from path {}!".format(loaded_path))
         return model, loaded_path
           
-def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
-    DEBUG = kwargs.get('debug', False)
-    if DEBUG: DEBUG = str(DEBUG).strip()
-    dir = os.getcwd() if not dir else (dir if os.path.isabs(dir) else os.path.join(os.getcwd(), dir))
-    xml = xml or os.path.join(dir, '*.xml')
-    txt = txt or os.path.join(dir, '*.txt')
-
-    # prepare 
-    datastream = geo.combo_pipeline(xml_path=xml, txt_path=txt)
-    batches = fetch_batch(datastream)
-    if DEBUG == '1':
-        print(next(batches))
-        return next(batches)
-    
-    train_test_splitter = split_data(batches)
-    train_files, test_files = itt.tee(train_test_splitter)
-    
-    train_files = itt.chain.from_iterable(itt.islice(train_files, 0, None, 2))
-    test_files = itt.chain.from_iterable(itt.islice(test_files, 1, None, 2))
-    if DEBUG == '2':
-        print(next(train_files), '\n\n', next(test_files))
-        return next(train_files)
-    
-    # load values for each accession:
-    def get_file_data(f):
-        return next(geo.txt_pipeline(os.path.join(dir, f + '*')))
-        
-    train = (tuple(zip(x, map(get_file_data, x.values()))) for x in train_files)
-    test = (tuple(zip(x, map(get_file_data, x.values()))) for x in test_files)
-    if DEBUG == '3':
-        print ( ( (next(train)) ) )
-        return (next(train))
-    
-    drop_label = drop_labels
-    retrieve_df = ((lambda x: x[1]) if drop_label 
-                    else (lambda pair: pd.DataFrame(data=pair[1]).rename_axis([pair[0]], axis=1)))
-    train = ((map(retrieve_df, df)) for df in train)
-    test = ((map(retrieve_df, df)) for df in test)
-    if DEBUG == '4':
-        print (tuple(next(train)))
-        return tuple(next(train))
-
-    train = (x for x in itt.chain.from_iterable(train))
-    test = (x for x in itt.chain.from_iterable(test))
-    if DEBUG == '5':
-        print(next(train), '\n'*3, next(test))
-        return (next(train))
-        
-    mode = kwargs.get('mode', 'train')
-    datagen = {'train': lambda: (train, train), 
-            'test': lambda: (test, test), 
-            'cross': lambda: (train, test),}.get(mode, lambda: None)()
-    return datagen
-          
-def sample_labels(generators, samplesize=None, *args, **kwargs):
-    out_generators = [None for _ in range(len(generators))]
-    nxt = next(generators[0])
-    #print(nxt)
-    size = nxt.shape # sample the data for size
-    samplesize = samplesize or size[0] # None input - do not subsample
-    safe_size = min(size[0], samplesize)
-    nxt = nxt.sample(safe_size)
-    safe_size = nxt.T.shape
-    out_generators[0] = itt.chain((nxt,), generators[0]) # return the sampled column for processing
-    #labels = nxt[geo.DATA_COLNAME].values
-    labels = nxt.index.values
-    
-    if kwargs.get('verbose', True): print('LABELS PICKED: ', labels, '\n')
-    
-    # drop everything not picked in this sampling
-    for i, gen in enumerate(generators):
-        #gen = (x.set_index(x[geo.DATA_COLNAME].values) for x in gen)
-        try:
-            gen = (map(lambda x: x.loc[labels], gen))
-            gen = (x.T for x in gen)
-            gen = (x.rename({v : x.index.name for v in x.index.values}) for x in gen)
-            #gen = (np.asarray(x.values) for x in gen)
-            #print("NXG:\n {}".format(next(gen).index))
-        except ValueError: pass
-        out_generators[i] = gen
-    
-    return out_generators, labels, safe_size
             
 class MenuConfiguration(object):
     def __init__(self, opts=None, **kwargs):
@@ -225,11 +55,11 @@ class MenuConfiguration(object):
         self.options.update((
             ('train_steps', 75), 
             ('test_steps', 5), 
-            ('label_sample_size', 10000), 
+            (LABEL_SAMPLE_SIZE, 30000), 
             ('list_cwd', False), 
             ('model_depth', 2), 
             ('drop_labels', False),
-            ('compression_fac', 16),
+            ('compression_fac', 256),
         ))
         # kwargs are options to use:
         if opts: self.options.update(opts)
@@ -247,7 +77,7 @@ class SkinApp(object):
     ACT_QUIT = '(Q)uit'
 
     DBG_DATA = 'DEBUG DATA (!)'
-    DBG_MODE = '!DEBUG MODE!'
+    DBG_MODE = '!lvl'
     
     def __init__(self, *args, **kwargs):
         self.prediction, self.history, self.modelpath = None, None, None
@@ -283,19 +113,20 @@ class SkinApp(object):
     def run_model(self, models=None, verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
         mode = kwargs.get('mode', 'train')
         
-        datagen = build_datastreams_gen(xml=xml, txt=txt, dir=dir, 
+        datagen = geo.build_datastreams_gen(xml=xml, txt=txt, dir=dir, 
                                         mode=mode, debug=False,
                                         drop_labels=self.config.options.get('drop_labels', False),
                                         )
                                                     
-        sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
+        sampled, labels, size = geo.sample_labels(datagen, self.config.options.get(LABEL_SAMPLE_SIZE, 1000))
         #raise Exception(next(sampled[0]))
         
         def predfunc(models):
             batch = next(sampled[0])
-            prediction = models[0].predict_on_batch(np.asarray([batch.values]))
+            prediction = models[1].predict_on_batch(np.asarray([batch.values]))
             prediction = pd.DataFrame(prediction[0])
-            prediction = prediction.T.set_index(labels)
+            prediction = prediction.T
+            #prediction = prediction.set_index(labels)
             prediction = prediction.rename(columns={0 : "{} ({})".format(batch.index[0], batch.index.name)})
             return prediction
             
@@ -316,12 +147,15 @@ class SkinApp(object):
         
         built_models = [None]
         print("SIZE: ", size)
-        if models is None or not all(models): built_models = build_models(datashape=size, 
-                                                                          compression_fac=self.config.options.get('compression_fac', 32), 
-                                                                          depth=self.config.options.get('model_depth', 2),
-                                                                          activators=('selu', 'sigmoid')
-                                                                          )
+        if models is None or not all(models): 
+            print(built_models)
+            built_models = build_models(datashape=size, 
+                                        compression_fac=self.config.options.get('compression_fac', 32), 
+                                        depth=self.config.options.get('model_depth', 2),
+                                        activators=('selu', 'sigmoid')
+                                        )
         #if len(models)>0 and hasattr(models[0], 'layers'): models = [x or models[0]
+        print(built_models)
         models = [x or built_models[i] for (i,x) in enumerate(models or built_models)]
         autoencoder = models[0]
         autoencoder.compile(optimizer='adadelta', loss='binary_crossentropy')
@@ -349,11 +183,11 @@ class SkinApp(object):
                     fitting = mode_func(models, fits)
                     print("\nRuns remaining: {}".format(fits))
                     if result is None or mode=='train': result = fitting
-                    else: 
+                    else:
                         try: result = result[result!=0].combine_first(fitting).fillna(0)
-                        except Exception: result = result.join(mode_func(models, fits), how='outer', rsuffix='-REP')
+                        except Exception:  result = result.join(mode_func(models, fits), how='outer', rsuffix='-REP')
                 except KeyboardInterrupt: fits = 0
-                sampled, labels, size = sample_labels(datagen, self.config.options.get('label_sample_size', 1000))
+                sampled, labels, size = geo.sample_labels(datagen, self.config.options.get(LABEL_SAMPLE_SIZE, 1000))
                 
                 if savepath and (not savepath is NotImplemented) and (not fits % 10 or 0 <= fits < 10): 
                     try: os.replace(savepath, savepath+'.backup')
@@ -436,10 +270,14 @@ class SkinApp(object):
                 try: _tmp, _tmp2 = load_model(list_cwd=self.config.options.get('list_cwd', False))
                 except Exception as Err: pass
                 if _tmp: 
-                    model = list(self.model)
+                    model = list(self.model or [None, None, None])
                     model[0] = _tmp
+                    _aux_components = getattr(model[0], 'aux_components', {})
+                    print("Aux components:", _aux_components)
+                    model[1], model[2] = _aux_components.get('Encoder'), _aux_components.get('Decoder')
                     self.model = tuple(model)
                     self.modelpath = str(_tmp2)
+                    self.config.options[LABEL_SAMPLE_SIZE] = self.model[0].input_shape[-1]
                     print("Model loaded successfully.")
             
             if action in self.modes[self.ACT_SAVE]:
@@ -496,7 +334,7 @@ class SkinApp(object):
                             print(" ")
                 
             if action in self.modes[self.DBG_DATA]:
-                _tmp = build_datastreams_gen(*args, xml=self.config.options.get('xml'), 
+                _tmp = geo.build_datastreams_gen(*args, xml=self.config.options.get('xml'), 
                                              txt=self.config.options.get('txt'), dir=self.config.options.get('dir'), 
                                              verbose=self.config.options.get('verbose'), 
                                              debug=self.config.options.get(self.DBG_MODE),
