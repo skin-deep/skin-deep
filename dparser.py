@@ -188,7 +188,7 @@ def split_data(batches, test_to_train=0.2, shuffle=True):
 def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
     #dir = os.getcwd() if not dir else (dir if os.path.isabs(dir) else os.path.join(os.getcwd(), dir))
     distype = 'NN'
-    dir = r'D:\GitHub\skin-deep\!Partitioned\' + distype
+    dir = r'D:\GitHub\skin-deep\!Partitioned\\' + distype
     files = glob.iglob(os.path.join(dir, '*.csv'))
     gen = (pd.DataFrame.from_csv(csvfile).rename(csvfile) for csvfile in files)
     gen = (df.rename(distype) for df in gen)
