@@ -8,6 +8,13 @@ class ExpressionModel(object):
     import keras as DLbackend
     DLmodel = DLbackend.models.Model
     
+    #import keras.backend.tensorflow_backend as ktf
+    #def get_session(gpu_fraction=0.333):
+    #    import tensorflow as tf
+    #    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=gpu_fraction, allow_growth=True)
+    #    return tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+    #ktf.set_session(get_session())
+    
     @classmethod
     def build(*args, **kwargs):
         """(Re-)builds the model.
@@ -29,8 +36,6 @@ class ExpressionModel(object):
         try: main_mdl, aux_parts = main_mdl[0], main_mdl[1:]
         except (AttributeError, IndexError): pass
         if main_mdl is NotImplemented: raise NotImplementedError
-        main_mdl.aux_components = {getattr(part, 'name', str(part)) : part for part in aux_parts}
-        print("Yup, done that!")#TRAIN ERRYTHING PER-CLASS
         
         return whole
         
@@ -59,7 +64,8 @@ class deep_AE(ExpressionModel):
         return input_lay
         
     @classmethod
-    def build(cls, datashape, activators=('selu', 'sigmoid'), compression_fac=None, **kwargs):
+    def build(cls, datashape, activators=None, compression_fac=None, **kwargs):
+        activators = activators or ('selu', 'sigmoid')
         uncompr_size, compr_size = cls.calculate_sizes(datashape, compression_fac)
         # deep levels handling:
         deep_lvls = kwargs.get('depth', 1)
@@ -77,21 +83,24 @@ class deep_AE(ExpressionModel):
         last_lay = cls.input_preprocessing(last_lay, **kwargs)
         
         for (i, siz) in enumerate(lay_sizes): #[0]th is already built
-            encoded = cls.DLbackend.layers.Dense(siz, activation=activators[0], name='encoder_{}'.format(i))(last_lay)
+            print(siz or "NONE!")
+            encoded = cls.DLbackend.layers.Dense(siz, activation=activators[0], kernel_initializer='lecun_normal', name='encoder_{}'.format(i))(last_lay)
             last_lay = encoded
         encoder = cls.DLmodel(inbound, encoded, name='Encoder')
         
-        representation = cls.DLbackend.layers.Input([encoder.layers[-1].output_shape[1:]])
+        representation = cls.DLbackend.layers.Input(encoder.layers[-1].output_shape[1:])
         
+        dec_start = None
         for (i, siz) in enumerate(reversed(lay_sizes[:-1])):
             print(i, siz)
-            decfunc = cls.DLbackend.layers.Dense(siz, activation=activators[1], name='decoder_{}'.format(i))
+            decfunc = cls.DLbackend.layers.Dense(siz, activation=activators[0], kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
             decoded = decfunc(last_lay)
             last_lay = decoded
-            if i==0: dec_start = decfunc
+            dec_start = dec_start or decfunc
         # let's make sure the last layer is 1:1 to input no matter what
-        decfunc = cls.DLbackend.layers.Dense(encoder.layers[0].input_shape[-1], activation=activators[1], name='decoder_{}'.format(len(lay_sizes)-1))
+        decfunc = cls.DLbackend.layers.Dense(encoder.layers[0].input_shape[-1], activation=activators[1], kernel_initializer='lecun_normal', name='decoder_{}'.format(len(lay_sizes)-1))
         decoded = decfunc(last_lay)
+        dec_start = dec_start or decfunc
             
         autoencoder = cls.DLmodel(inbound, decoded, name='Autoencoder')
         
@@ -100,15 +109,17 @@ class deep_AE(ExpressionModel):
         decoder = cls.DLmodel(dummy_in, dec_start(dummy_in), name='Decoder') #this is bullshit rn
 
         return (autoencoder, encoder, decoder)
-    
+        
+
 class deepAE_dropout(deep_AE):
     @classmethod
     def input_preprocessing(cls, input_lay, *args, **kwargs):
         transformed = input_lay
-        transformed = cls.DLbackend.layers.Dropout(0.5)(transformed)
+        transformed = cls.DLbackend.layers.AlphaDropout(0.5)(transformed)
         return transformed
     
-def build_models(datashape, which='deepAE', activators=('selu', 'sigmoid'), **kwargs):
+def build_models(datashape, which='deepAE-dropout', activators=None, **kwargs):
+    if not activators: activators = ('selu', 'linear')
     model_dict = {'deepAE': deep_AE, 'deepAE-dropout': deepAE_dropout}
     model_to_build = which if isinstance(which, ExpressionModel) else model_dict.get(which, NotImplemented)
     if model_to_build is NotImplemented: raise NotImplementedError

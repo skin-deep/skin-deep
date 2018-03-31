@@ -185,18 +185,18 @@ def split_data(batches, test_to_train=0.2, shuffle=True):
         yield train
         yield test
         
-def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
+def build_datastreams_gen2(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
     #dir = os.getcwd() if not dir else (dir if os.path.isabs(dir) else os.path.join(os.getcwd(), dir))
-    distype = 'NN'
+    distype = kwargs.get('distype') or 'PP'
     dir = r'D:\GitHub\skin-deep\!Partitioned\\' + distype
     files = glob.iglob(os.path.join(dir, '*.csv'))
-    gen = (pd.DataFrame.from_csv(csvfile).rename(csvfile) for csvfile in files)
-    gen = (df.rename(distype) for df in gen)
+    gen = (pd.DataFrame.from_csv(csvfile) for csvfile in files)
+    gen = (df.rename_axis(distype) for df in gen)
     gen = itt.cycle(gen)
     return [gen, gen]
         
         
-def build_datastreams_gen2(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
+def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
     DEBUG = kwargs.get('debug', False)
     if DEBUG: DEBUG = str(DEBUG).strip()
     dir = os.getcwd() if not dir else (dir if os.path.isabs(dir) else os.path.join(os.getcwd(), dir))
@@ -204,24 +204,28 @@ def build_datastreams_gen2(xml=None, txt=None, dir=None, drop_labels=False, **kw
     txt = txt or os.path.join(dir, '*.txt')
 
     # prepare 
+    labels = set()
     datastream = combo_pipeline(xml_path=xml, txt_path=txt)
     batches = fetch_batch(datastream)
+    
     if DEBUG == '1':
-        print(next(batches))
-        return next(batches)
+        print(batches)
+        _nextbt = next(batches)
+        print("NEXT BATCH: ", _nextbt)
+        return _nextbt
     
     train_test_splitter = split_data(batches)
     train_files, test_files = itt.tee(train_test_splitter)
     
     train_files = itt.chain.from_iterable(itt.islice(train_files, 0, None, 2))
     test_files = itt.chain.from_iterable(itt.islice(test_files, 1, None, 2))
+    
     if DEBUG == '2':
         print(next(train_files), '\n\n', next(test_files))
         return next(train_files)
     
     # load values for each accession:
-    def get_file_data(f):
-        return next(txt_pipeline(os.path.join(dir, f + '*')))
+    def get_file_data(f): return next(txt_pipeline(os.path.join(dir, f + '*')))
         
     train = (tuple(zip(x, map(get_file_data, x.values()))) for x in train_files)
     test = (tuple(zip(x, map(get_file_data, x.values()))) for x in test_files)
@@ -230,14 +234,18 @@ def build_datastreams_gen2(xml=None, txt=None, dir=None, drop_labels=False, **kw
         return (next(train))
     
     drop_label = drop_labels
+    def nodrop_retrieve(pair): 
+        labels.update([pair[0]])
+        return pd.DataFrame(data=pair[1]).rename_axis([pair[0]], axis=1)
     retrieve_df = ((lambda x: x[1]) if drop_label 
-                    else (lambda pair: pd.DataFrame(data=pair[1]).rename_axis([pair[0]], axis=1)))
+                    else (lambda x: nodrop_retrieve(x)))
     train = ((map(retrieve_df, df)) for df in train)
     test = ((map(retrieve_df, df)) for df in test)
     if DEBUG == '4':
         print (tuple(next(train)))
         return tuple(next(train))
 
+    tuple(next(train)) # ensures a full set was inspected; extremely hacky, find a better way
     train = (x for x in itt.chain.from_iterable(train))
     test = (x for x in itt.chain.from_iterable(test))
     if DEBUG == '5':
@@ -255,20 +263,21 @@ def build_datastreams_gen2(xml=None, txt=None, dir=None, drop_labels=False, **kw
             else: ntrain.to_csv(savepath)
         return (ntrain)
         
+    print("Labels: ", labels)
     mode = kwargs.get('mode', 'train')
     datagen = {'train': lambda: (train, train), 
             'test': lambda: (test, test), 
             'cross': lambda: (train, test),}.get(mode, lambda: None)()
     return datagen
     
-def sample_labels(generators, samplesize=None, *args, **kwargs):
+def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
     out_generators = [None for _ in range(len(generators))]
     nxt = next(generators[0])
     #print(nxt)
     size = nxt.shape # sample the data for size
     samplesize = samplesize or size[0] # None input - do not subsample
     safe_size = min(size[0], samplesize)
-    nxt = nxt.sample(safe_size)
+    nxt = nxt[0+(safe_size*offset):(safe_size*(offset+1))] if size[0] <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
     safe_size = nxt.T.shape
     out_generators[0] = itt.chain((nxt,), generators[0]) # return the sampled column for processing
     #labels = nxt[geo.DATA_COLNAME].values

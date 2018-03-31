@@ -9,62 +9,7 @@ import matplotlib.pyplot as plt
 from importlib import reload as Reimport
 Models = NotImplemented # deferred loading to save on keras bootup time; module-scope mostly for reloads
 
-# option keys
-LABEL_SAMPLE_SIZE = 'label_sample_size'
-
-def build_models(datashape, compression_fac=32, activators=('selu', 'sigmoid'), **kwargs):
-    try: Reimport(models)
-    except (NameError, TypeError): import models
-    Models = models
-    return Models.build_models(datashape, compression_fac=32, activators=('selu', 'sigmoid'), **kwargs)
-                   
-def load_model(*args, model_path=NotImplemented, **kwargs):
-    model, loaded_path = None, None
-    
-    while model_path is NotImplemented: 
-        if kwargs.get('list_cwd'): print("Files in current dir: {}".format(
-                                            [(x if os.path.isfile(x) else x + '/') 
-                                            for x in os.listdir(os.getcwd())])
-                                        )
-        try: 
-            model_path = input("Path to load:\n>>> ")
-        except (KeyboardInterrupt, EOFError):
-            break
-        if not os.path.exists(model_path):
-            if model_path in {'Q',}: 
-                print('Returning to menu...')
-                break
-            else:
-                print('Invalid path.')
-                model_path = NotImplemented
-    else:
-        try:
-            import keras
-            model = keras.models.load_model(model_path)
-            loaded_path = model_path
-        except Exception as Err:
-            if kwargs.get('verbose'): sys.excepthook(*sys.exc_info())
-            print("\n\nModel could not be loaded from path {}!".format(loaded_path))
-        return model, loaded_path
-          
-            
-class MenuConfiguration(object):
-    def __init__(self, opts=None, **kwargs):
-        self.options = coll.OrderedDict()
-        # defaults:
-        self.options.update((
-            ('train_steps', 75), 
-            ('test_steps', 5), 
-            (LABEL_SAMPLE_SIZE, 30000), 
-            ('list_cwd', False), 
-            ('model_depth', 2), 
-            ('drop_labels', False),
-            ('compression_fac', 256),
-        ))
-        # kwargs are options to use:
-        if opts: self.options.update(opts)
-        self.options.update(kwargs)
-        # TODO: clean up the kwargs
+import config
         
 
 class SkinApp(object):    
@@ -82,7 +27,8 @@ class SkinApp(object):
     def __init__(self, *args, **kwargs):
         self.prediction, self.history, self.modelpath = None, None, None
         self.model = [None, None, None]
-        self.config = MenuConfiguration({self.DBG_MODE : False,}, **kwargs)
+        self.config = config.MenuConfiguration({self.DBG_MODE : False,}, **kwargs)
+        self.actionqueque = coll.deque()
         #self.config.options.update(sorted([('verbosity', verbose), ('xml_path', xml), ('txt_path', txt), ('directory', dir)]))
         
         self.modes = coll.OrderedDict()
@@ -118,21 +64,23 @@ class SkinApp(object):
                                         drop_labels=self.config.options.get('drop_labels', False),
                                         )
                                                     
-        sampled, labels, size = geo.sample_labels(datagen, self.config.options.get(LABEL_SAMPLE_SIZE, 1000))
-        #raise Exception(next(sampled[0]))
+        sampled, labels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE, 10000))
         
         def predfunc(models):
             batch = next(sampled[0])
-            prediction = models[1].predict_on_batch(np.asarray([batch.values]))
+            orig_vals = np.array([batch.values], dtype='float32')
+            print(orig_vals.dtype)
+            prediction = models[config.which_model].predict_on_batch(orig_vals)
             prediction = pd.DataFrame(prediction[0])
             prediction = prediction.T
-            #prediction = prediction.set_index(labels)
-            prediction = prediction.rename(columns={0 : "{} ({})".format(batch.index[0], batch.index.name)})
+            prediction = prediction.set_index(labels)
+            #prediction = prediction.rename(columns={0 : "{} ({})".format(batch.index[0], batch.index.name)})
+            prediction = pd.concat({'original':batch.T, 'predicted':prediction}, axis=1)
             return prediction
             
         def trainfunc(models, e):
             batchgen = (np.asarray([x.values]) for x in sampled[0])
-            validgen = itt.cycle([np.asarray([next(sampled[1]).values]) for x in range(self.config.options.get('train_steps', 75))])
+            validgen = itt.cycle([np.asarray([next(sampled[1]).values], dtype='float32') for x in range(self.config.options.get('train_steps', 75))])
             history = models[0].fit_generator(zip(((batch + 0.25 * np.random.normal(size=size)) for batch in batchgen), batchgen), 
                                               steps_per_epoch=self.config.options.get('train_steps', 75), 
                                               initial_epoch=e-1, epochs=e,
@@ -149,16 +97,20 @@ class SkinApp(object):
         print("SIZE: ", size)
         if models is None or not all(models): 
             print(built_models)
-            built_models = build_models(datashape=size, 
-                                        compression_fac=self.config.options.get('compression_fac', 32), 
-                                        depth=self.config.options.get('model_depth', 2),
-                                        activators=('selu', 'sigmoid')
-                                        )
+            built_models = self.build_models(datashape=size, 
+                                            compression_fac=self.config.options.get('compression_fac', 512),
+                                            depth=self.config.options.get('model_depth', 1),
+                                            activators=self.config.options.get('activators')
+                                            )
+            
         #if len(models)>0 and hasattr(models[0], 'layers'): models = [x or models[0]
         print(built_models)
-        models = [x or built_models[i] for (i,x) in enumerate(models or built_models)]
+        def Compile(mdl, *args, **kwargs): 
+            print(kwargs)
+            mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
+            return mdl
+        models = [x or Compile(mdl=built_models[i], optimizer='adadelta', loss='logcosh') for (i,x) in enumerate(models or built_models)]
         autoencoder = models[0]
-        autoencoder.compile(optimizer='adadelta', loss='binary_crossentropy')
         
         fits = 1
         savepath = NotImplemented
@@ -168,7 +120,7 @@ class SkinApp(object):
             if not fits or fits < 1:
                 while True:
                     try:
-                        fits = int(input("Enter a number of fittings to perform before prompting again.\n (value <= 0 to terminate): "))
+                        fits = int(self.get_input("Enter a number of fittings to perform before prompting again.\n (value <= 0 to terminate): "))
                         break
                     except (KeyboardInterrupt, EOFError):
                         return
@@ -178,7 +130,7 @@ class SkinApp(object):
                         
             if fits:
                 if savepath is NotImplemented: 
-                    savepath = input("If you want to save the result, enter the filename of file to save it to: ")
+                    savepath = self.get_input("If you want to save the result, enter the filename of file to save it to: ")
                 try:
                     fitting = mode_func(models, fits)
                     print("\nRuns remaining: {}".format(fits))
@@ -187,7 +139,7 @@ class SkinApp(object):
                         try: result = result[result!=0].combine_first(fitting).fillna(0)
                         except Exception:  result = result.join(mode_func(models, fits), how='outer', rsuffix='-REP')
                 except KeyboardInterrupt: fits = 0
-                sampled, labels, size = geo.sample_labels(datagen, self.config.options.get(LABEL_SAMPLE_SIZE, 1000))
+                #sampled, labels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE, 1000)) #resampling
                 
                 if savepath and (not savepath is NotImplemented) and (not fits % 10 or 0 <= fits < 10): 
                     try: os.replace(savepath, savepath+'.backup')
@@ -200,23 +152,67 @@ class SkinApp(object):
         
         return (models, result, savepath)
 
-
+    def build_models(self, datashape, compression_fac=1024, activators=('selu', 'linear'), **kwargs):
+        try: Reimport(models)
+        except (NameError, TypeError): import model_defs
+        Models = model_defs
+        return Models.build_models(datashape, compression_fac=compression_fac, activators=activators, **kwargs)
+    
+    def load_model(self, *args, model_path=NotImplemented, **kwargs):
+        model, loaded_path = None, None
+        
+        while model_path is NotImplemented: 
+            if kwargs.get('list_cwd'): print("Files in current dir: {}".format(
+                                                [(x if os.path.isfile(x) else x + '/') 
+                                                for x in os.listdir(os.getcwd())])
+                                            )
+            try: 
+                model_path = self.get_input("Path to load:\n>>> ")
+            except (KeyboardInterrupt, EOFError):
+                break
+            if not os.path.exists(model_path):
+                if model_path in {'Q',}: 
+                    print('Returning to menu...')
+                    break
+                else:
+                    print('Invalid path.')
+                    model_path = NotImplemented
+        else:
+            try:
+                import keras
+                model = keras.models.load_model(model_path)
+                loaded_path = model_path
+            except Exception as Err:
+                if kwargs.get('verbose'): sys.excepthook(*sys.exc_info())
+                print("\n\nModel could not be loaded from path {}!".format(loaded_path))
+            return model, loaded_path
+            
+    def get_input(self, prompt='>>> ', secondary='>>> '):
+        curr_prompt = prompt
+        action = NotImplemented
+        new_cmds = []
+        while action is NotImplemented:
+            #print(new_cmds or 'No new commands!')
+            try: 
+                action = self.actionqueque.popleft()
+                action = str(action) if action and action is not NotImplemented else None
+                if action != (new_cmds or [NotImplemented])[0]: print(curr_prompt + str(action))
+            except (IndexError, AttributeError):
+                action = NotImplemented
+                if not self.actionqueque:
+                    try: new_cmds = (str(input(curr_prompt)).split() or [None])
+                    except (KeyboardInterrupt, EOFError): action = None
+                    self.actionqueque = coll.deque(new_cmds)
+            curr_prompt = secondary
+        return action
+            
     def run(self, *args, **kwargs):
         mainloop = True
-        actionqueque = coll.deque(kwargs.get('cmd') or [NotImplemented])
-        action = NotImplemented
+        self.actionqueque.extend(kwargs.get('cmd', [None]))
         while mainloop:
             prompt = self.baseprompt.format(mdl=(('\n Currently loaded model: '+ str(self.modelpath))))
-            if not action: 
-                prompt = '>>> '
-                action = NotImplemented
-            if not actionqueque:
-                try: actionqueque.extend(input(prompt).lower().split())
-                except (KeyboardInterrupt, EOFError):
-                    action = None
-                    mainloop = False
-            try: action = str(actionqueque.popleft()).lower()
-            except IndexError: action = None
+            action = str(self.get_input(prompt, '>>> ')).lower()
+            if not action: action = NotImplemented
             
             if action in self.modes[self.ACT_TRAIN]: 
                 try:
@@ -242,10 +238,10 @@ class SkinApp(object):
             if action in self.modes[self.ACT_PRED]:
                 try:
                     _tmp = self.run_model(*args, models=self.model, verbose=self.config.options.get('verbose'), 
-                                        xml=self.config.options.get('xml'), txt=self.config.options.get('txt'), 
-                                        dir=self.config.options.get('dir'), 
-                                        mode='test', **kwargs
-                                    )
+                                            xml=self.config.options.get('xml'), txt=self.config.options.get('txt'), 
+                                            dir=self.config.options.get('dir'), 
+                                            mode='test', **kwargs
+                                        )
                 except Exception as Err: 
                     _tmp = None
                     sys.excepthook(*sys.exc_info())
@@ -267,22 +263,24 @@ class SkinApp(object):
                     
             if action in self.modes[self.ACT_LOAD]:
                 _tmp, _tmp2 = None, None
-                try: _tmp, _tmp2 = load_model(list_cwd=self.config.options.get('list_cwd', False))
+                import keras
+                try: _tmp, _tmp2 = self.load_model(list_cwd=self.config.options.get('list_cwd', False))
                 except Exception as Err: pass
                 if _tmp: 
                     model = list(self.model or [None, None, None])
                     model[0] = _tmp
-                    _aux_components = getattr(model[0], 'aux_components', {})
-                    print("Aux components:", _aux_components)
-                    model[1], model[2] = _aux_components.get('Encoder'), _aux_components.get('Decoder')
+                    try: model[1] = keras.models.Model(keras.layers.Input(model[0].layers[0].input_shape), [x for x in model[0].layers if 'encoder' in x.name][-1](model[0].layers[0]))
+                    except Exception as E: sys.excepthook(*sys.exc_info())
+                    #try: model[2] = keras.models.Model(model[0].layers[0], [x for x in model[0].layers if 'decoder' in x.name][-1](model[1].layers[-1]))
+                    #except Exception as E: sys.excepthook(*sys.exc_info())
                     self.model = tuple(model)
                     self.modelpath = str(_tmp2)
-                    self.config.options[LABEL_SAMPLE_SIZE] = self.model[0].input_shape[-1]
+                    self.config.options[config.LABEL_SAMPLE_SIZE] = self.model[0].input_shape[-1]
                     print("Model loaded successfully.")
             
             if action in self.modes[self.ACT_SAVE]:
                 if self.model[0]:
-                    savepath = input("Enter the filename of file to save it to: ")
+                    savepath = self.get_input("Enter the filename of file to save it to: ")
                     savepath = savepath.strip() if savepath else savepath
                     if savepath: 
                         self.model[0].save(savepath)
@@ -311,7 +309,7 @@ class SkinApp(object):
                     print("    >>> {siz} <<<"
                             .format(siz='{text:^'+repr(menusize-12)+'}')
                             .format(text="'Q' - RETURN"))
-                    try: option = input('\n    > ')
+                    try: option = self.get_input('\n    > ', '\n    > ')
                     except (KeyboardInterrupt, EOFError): option = 'Q'
                     print(' ')
                     
@@ -325,7 +323,7 @@ class SkinApp(object):
                         except Exception as E: print(E)
                     
                     if option in self.config.options:
-                        newval = input("    - {} => ".format(option))
+                        newval = self.get_input("    - {} => ".format(option))
                         if newval:
                             evaluables = {'None' : None, 'False' : False, 'True' : True}
                             if newval in evaluables: newval = evaluables[newval]
@@ -348,7 +346,7 @@ class SkinApp(object):
             if action == '!eval':
                 while True:
                     dbgres = None
-                    try: query = input('DEBUG: >> ')
+                    try: query = self.get_input('DEBUG: >> ')
                     except (KeyboardInterrupt, EOFError): break
                     if not query or 'q' == query.lower(): break
                     try: dbgres = eval(query)
@@ -357,6 +355,7 @@ class SkinApp(object):
                 
             if action in self.modes[self.ACT_QUIT]:
                 mainloop = False
+                action = None
     
 def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     app_instance = SkinApp(*args, verbose=verbose, xml=xml, txt=txt, dir=dir, **kwargs)
