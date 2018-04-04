@@ -38,7 +38,7 @@ class SkinApp(object):
         self.modes.update({self.ACT_SAVE : {'4', 'save', 's'},})
         self.modes.update({self.ACT_DROP : {'5', 'drop', 'd'},})
         self.modes.update({self.ACT_CONF : {'6', 'configure', 'c'},})
-        self.modes.update({self.ACT_QUIT : {'0', 'quit', 'q'},})
+        self.modes.update({self.ACT_QUIT : {'quit', 'q'},})
     
         self.modes.update({self.DBG_DATA : {'!', '-1'},})
     
@@ -59,33 +59,41 @@ class SkinApp(object):
     def run_model(self, models=None, verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
         mode = kwargs.get('mode', 'train')
         
-        datagen = geo.build_datastreams_gen(xml=xml, txt=txt, dir=dir, 
-                                        mode=mode, debug=False,
-                                        drop_labels=self.config.options.get('drop_labels', False),
-                                        )
+        datagen, catlabels = geo.build_datastreams_gen(xml=xml, txt=txt, dir=dir, 
+                                                       mode=mode, debug=False,
+                                                       drop_labels=self.config.options.get('drop_labels', False),
+                                                       )
                                                     
-        sampled, labels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE, 10000))
+        #print("CAT LABELS: ", catlabels)
+        sampled, genelabels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE))
         
         def predfunc(models):
             batch = next(sampled[0])
             orig_vals = np.array([batch.values], dtype='float32')
-            print(orig_vals.dtype)
             prediction = models[config.which_model].predict_on_batch(orig_vals)
-            prediction = pd.DataFrame(prediction[0])
-            prediction = prediction.T
-            prediction = prediction.set_index(labels)
-            #prediction = prediction.rename(columns={0 : "{} ({})".format(batch.index[0], batch.index.name)})
+            #print("RAW prediction:\n", prediction)
+            prediction = geo.parse_prediction(prediction, catlabels)
+            prediction = prediction.set_index(genelabels)
             prediction = pd.concat({'original':batch.T, 'predicted':prediction}, axis=1)
+            #print(batch, prediction)
             return prediction
             
         def trainfunc(models, e):
-            batchgen = (np.asarray([x.values]) for x in sampled[0])
-            validgen = itt.cycle([np.asarray([next(sampled[1]).values], dtype='float32') for x in range(self.config.options.get('train_steps', 75))])
-            history = models[0].fit_generator(zip(((batch + 0.25 * np.random.normal(size=size)) for batch in batchgen), batchgen), 
-                                              steps_per_epoch=self.config.options.get('train_steps', 75), 
+            batchgen = ({
+                         'expression_in': np.array(x.values), 
+                         'expression_out': np.array(x.values), 
+                         'diagnosis_in': np.array(catlabels.get(x.index.name)), 
+                         'diagnosis_out': np.array(catlabels.get(x.index.name))
+                        } 
+                         for x in sampled[0])
+            #validgen = itt.cycle([np.asarray([next(sampled[1]).values], dtype='float32') for x in range(self.config.options.get('train_steps', 75))])
+            history = models[0].fit_generator(
+                                              zip(batchgen, batchgen),
+                                              #zip(((batch[0] + 0.25 * np.random.normal(size=size), batch[1]) for batch in batchgen), batchgen), 
+                                              steps_per_epoch=self.config.options.get('train_steps', 20), 
                                               initial_epoch=e-1, epochs=e,
-                                              validation_data=zip(validgen, validgen),
-                                              validation_steps=self.config.options.get('train_steps', 75)
+                                              #validation_data=zip(validgen, validgen),
+                                              #validation_steps=self.config.options.get('train_steps', 75)
                                               )
             return history
             
@@ -97,22 +105,24 @@ class SkinApp(object):
         print("SIZE: ", size)
         if models is None or not all(models): 
             print(built_models)
-            built_models = self.build_models(datashape=size, 
+            built_models = self.build_models(datashape=size, labels=np.array(tuple(catlabels.values())[-1]),
                                             compression_fac=self.config.options.get('compression_fac', 512),
-                                            depth=self.config.options.get('model_depth', 1),
+                                            depth=self.config.options.get('model_depth', 3),
                                             activators=self.config.options.get('activators')
                                             )
-            
-        #if len(models)>0 and hasattr(models[0], 'layers'): models = [x or models[0]
-        print(built_models)
-        def Compile(mdl, *args, **kwargs): 
-            print(kwargs)
-            mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
+        
+        def Compile(mdl, i=1, *args, **kwargs): 
+            print("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl), kwargs)
+            if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
+                                 loss={'expression_out': kwargs.get('loss'), 'diagnosis_out': 'categorical_crossentropy'},
+                                 loss_weights={'expression_out': 1, 'diagnosis_out': 9})
+            else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             return mdl
-        models = [x or Compile(mdl=built_models[i], optimizer='adadelta', loss='logcosh') for (i,x) in enumerate(models or built_models)]
+        models = [models[i] or Compile(mdl=built_models[i], i=i, optimizer='adadelta', loss='logcosh') for (i,x) in enumerate(built_models)]
+        self.model = models
         autoencoder = models[0]
         
-        fits = 1
+        fits, totalfits = 1, 0
         savepath = NotImplemented
         result = None
         while fits:
@@ -129,17 +139,16 @@ class SkinApp(object):
                         print("Invalid input. Try again.")
                         
             if fits:
+                totalfits = max(totalfits, fits)
                 if savepath is NotImplemented: 
                     savepath = self.get_input("If you want to save the result, enter the filename of file to save it to: ")
                 try:
                     fitting = mode_func(models, fits)
-                    print("\nRuns remaining: {}".format(fits))
+                    #print("\nRuns remaining: {}".format(fits-1))
                     if result is None or mode=='train': result = fitting
-                    else:
-                        try: result = result[result!=0].combine_first(fitting).fillna(0)
-                        except Exception:  result = result.join(mode_func(models, fits), how='outer', rsuffix='-REP')
+                    else: result = result.join(mode_func(models, fits), how='outer', rsuffix=str(totalfits))
                 except KeyboardInterrupt: fits = 0
-                #sampled, labels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE, 1000)) #resampling
+                #sampled, genelabels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE, 1000)) #resampling
                 
                 if savepath and (not savepath is NotImplemented) and (not fits % 10 or 0 <= fits < 10): 
                     try: os.replace(savepath, savepath+'.backup')
@@ -152,11 +161,12 @@ class SkinApp(object):
         
         return (models, result, savepath)
 
-    def build_models(self, datashape, compression_fac=1024, activators=('selu', 'linear'), **kwargs):
+    def build_models(self, datashape, labels=None, compression_fac=1024, activators=None, **kwargs):
         try: Reimport(models)
         except (NameError, TypeError): import model_defs
         Models = model_defs
-        return Models.build_models(datashape, compression_fac=compression_fac, activators=activators, **kwargs)
+        #print('App build_models kwargs: ', kwargs)
+        return Models.build_models(datashape, labels=labels, compression_fac=compression_fac, activators=activators, **kwargs)
     
     def load_model(self, *args, model_path=NotImplemented, **kwargs):
         model, loaded_path = None, None
@@ -192,10 +202,10 @@ class SkinApp(object):
         action = NotImplemented
         new_cmds = []
         while action is NotImplemented:
-            #print(new_cmds or 'No new commands!')
             try: 
                 action = self.actionqueque.popleft()
                 action = str(action) if action and action is not NotImplemented else None
+                if action == 'None': action = None
                 if action != (new_cmds or [NotImplemented])[0]: print(curr_prompt + str(action))
             except (IndexError, AttributeError):
                 action = NotImplemented
@@ -269,8 +279,8 @@ class SkinApp(object):
                 if _tmp: 
                     model = list(self.model or [None, None, None])
                     model[0] = _tmp
-                    try: model[1] = keras.models.Model(keras.layers.Input(model[0].layers[0].input_shape), [x for x in model[0].layers if 'encoder' in x.name][-1](model[0].layers[0]))
-                    except Exception as E: sys.excepthook(*sys.exc_info())
+                    #try: model[1] = keras.models.Model(keras.layers.Input(model[0].layers[0].input_shape), [x for x in model[0].layers if 'encoder' in x.name][-1](model[0].layers[0]))
+                    #except Exception as E: sys.excepthook(*sys.exc_info())
                     #try: model[2] = keras.models.Model(model[0].layers[0], [x for x in model[0].layers if 'decoder' in x.name][-1](model[1].layers[-1]))
                     #except Exception as E: sys.excepthook(*sys.exc_info())
                     self.model = tuple(model)

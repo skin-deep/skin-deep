@@ -205,6 +205,7 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
 
     # prepare 
     labels = set()
+    labels = {'PP', 'PN', 'NN'} # DEBUG ONLY, REMOVEME!
     datastream = combo_pipeline(xml_path=xml, txt_path=txt)
     batches = fetch_batch(datastream)
     
@@ -235,7 +236,7 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
     
     drop_label = drop_labels
     def nodrop_retrieve(pair): 
-        labels.update([pair[0]])
+        #labels.update([pair[0]]) # RESTOREME!
         return pd.DataFrame(data=pair[1]).rename_axis([pair[0]], axis=1)
     retrieve_df = ((lambda x: x[1]) if drop_label 
                     else (lambda x: nodrop_retrieve(x)))
@@ -263,21 +264,30 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
             else: ntrain.to_csv(savepath)
         return (ntrain)
         
+    # turn labels into indices:
+    labels = dict(enumerate(sorted(labels)))
+    # one-hot the labels:
+    from keras.utils import to_categorical as categ_encode
+    category_indices = np.array(tuple(labels.keys()), dtype=int).T
+    encoding = categ_encode(category_indices)
+    labels = {labels[i]:np.array([encoding[i]]) for (i,k) in enumerate(labels)}
     print("Labels: ", labels)
+    
     mode = kwargs.get('mode', 'train')
     datagen = {'train': lambda: (train, train), 
             'test': lambda: (test, test), 
             'cross': lambda: (train, test),}.get(mode, lambda: None)()
-    return datagen
+    return datagen, labels
     
 def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
+    print(generators)
     out_generators = [None for _ in range(len(generators))]
     nxt = next(generators[0])
     #print(nxt)
-    size = nxt.shape # sample the data for size
-    samplesize = samplesize or size[0] # None input - do not subsample
-    safe_size = min(size[0], samplesize)
-    nxt = nxt[0+(safe_size*offset):(safe_size*(offset+1))] if size[0] <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
+    size = nxt.size # sample the data for size
+    samplesize = samplesize or size # None input - do not subsample
+    safe_size = min(size, samplesize)
+    nxt = nxt[0+(safe_size*offset):(safe_size*(offset+1))] if size <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
     safe_size = nxt.T.shape
     out_generators[0] = itt.chain((nxt,), generators[0]) # return the sampled column for processing
     #labels = nxt[geo.DATA_COLNAME].values
@@ -299,6 +309,18 @@ def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
     
     return out_generators, labels, safe_size
 
+def parse_prediction(predarray, labels=None, *args, **kwargs):
+    labels = labels or {}
+    print("RAW: \n", predarray)
+    diagarray, topprob, diagnosis = np.array([predarray[1][-1][-1]]), -1., None
+    if labels: print("PROBABILITIES: ")
+    for (labl, onehot) in labels.items():
+        guess = np.round(np.nanmax(onehot*diagarray)*100, 2)
+        print("{LAB}: {PROB}%".format(LAB=labl, PROB=(guess or '<0.01')))
+        if guess > topprob: diagnosis, topprob = labl, guess
+    predarray = pd.Series(predarray[0].flatten(), name=diagnosis).to_frame()
+    return predarray
+    
 def main(xml=None, txt=None, verbose=None, *args, **kwargs):
     data = combo_pipeline(xml_path=xml, txt_path=txt, verbose=verbose)
     #start = (next(data))
