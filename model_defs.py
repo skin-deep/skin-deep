@@ -122,7 +122,7 @@ class labeled_AE(deep_AE):
     @classmethod
     def input_preprocessing(cls, input_lay, *args, **kwargs):
         transformed = input_lay
-        transformed = cls.DLbackend.layers.AlphaDropout(0.25)(transformed)
+        transformed = cls.DLbackend.layers.AlphaDropout(0.15)(transformed)
         return transformed
         
     @classmethod
@@ -160,14 +160,14 @@ class labeled_AE(deep_AE):
         #labels = np.array(labels)
         # 'interface' layer for inspecting latent spaces as a predictive ensemble
         ensemble_inputs = {enc_out_layer}
-        interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', 350), activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
+        interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', 650), activation='linear', activity_regularizer=cls.DLbackend.regularizers.l1(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
         for assay_latent_space in ensemble_inputs:
             # corrupt each input separately
             diagger_inp = cls.DLbackend.layers.AlphaDropout(0.15)(assay_latent_space)
             # connect the interface layer to each input
             diagger = interface_node(diagger_inp)
         #diagger = cls.DLbackend.layers.Dense(100, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='diagger_{}'.format(1))(diagger)
-        diagnosis = cls.DLbackend.layers.Dense(3, activation=activators.get('classification', 'softmax'), kernel_initializer='lecun_normal', name='diagnosis_out')(diagger)
+        diagnosis = cls.DLbackend.layers.Dense(3, activation=activators.get('classification', 'softmax'), kernel_initializer='lecun_normal', name='diagnosis')(diagger)
         
         # Decoder: compressed vals -> regression vals
         dec_start = None

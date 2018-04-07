@@ -2,17 +2,22 @@ import collections as coll
 
 
 LABEL_SAMPLE_SIZE = 'label_sample_size'
+SAVE_EVERY = 'save_every'
+SAVE_TAILS = 'save_low_epochs'
+
 which_model = 0 # TEMPORARY VAR, REMOVE ME!
 
 class MenuConfiguration(object):
     defaults =  (
-                    ('train_steps', 180), 
+                    ('train_steps', 60), 
                     ('test_steps', 5), 
                     (LABEL_SAMPLE_SIZE, None), 
                     ('list_cwd', False), 
                     ('model_depth', 3), 
                     ('drop_labels', False),
-                    ('compression_fac', 256),
+                    ('compression_fac', 300),
+                    (SAVE_EVERY, 10),
+                    (SAVE_TAILS, False),
                 )
 
     def __init__(self, opts=None, **kwargs):

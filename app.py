@@ -69,28 +69,28 @@ class SkinApp(object):
         
         def predfunc(models):
             batch = next(sampled[0])
-            orig_vals = np.array([batch.values], dtype='float32')
-            prediction = models[config.which_model].predict_on_batch(orig_vals)
-            #print("RAW prediction:\n", prediction)
-            prediction = geo.parse_prediction(prediction, catlabels)
-            prediction = prediction.set_index(genelabels)
-            prediction = pd.concat({'original':batch.T, 'predicted':prediction}, axis=1)
-            #print(batch, prediction)
+            #print(batch)
+            orig_vals = np.array(batch.T.values, dtype='float32')
+            prediction = models[config.which_model].predict_on_batch(batch.T)
+            prediction = geo.parse_prediction(prediction, catlabels, batch=batch, genes=genelabels)
             return prediction
             
         def trainfunc(models, e):
-            batchgen = ({
-                         'expression_in': np.array(x.values), 
-                         'expression_out': np.array(x.values), 
-                         'diagnosis_in': np.array(catlabels.get(x.index.name)), 
-                         'diagnosis_out': np.array(catlabels.get(x.index.name))
-                        } 
+            batchgen = (({
+                         'expression_in': np.array(x.T.values),
+                         'diagnosis_in': np.array(catlabels.get(x.index.name)),
+                        },
+                        {
+                         'expression_out': np.array(x.T.values),
+                         'diagnosis': np.array(catlabels.get(x.index.name))
+                        })
                          for x in sampled[0])
             #validgen = itt.cycle([np.asarray([next(sampled[1]).values], dtype='float32') for x in range(self.config.options.get('train_steps', 75))])
             history = models[0].fit_generator(
-                                              zip(batchgen, batchgen),
+                                              batchgen,
+                                              #zip(batchgen, batchgen),
                                               #zip(((batch[0] + 0.25 * np.random.normal(size=size), batch[1]) for batch in batchgen), batchgen), 
-                                              steps_per_epoch=self.config.options.get('train_steps', 20), 
+                                              steps_per_epoch=self.config.options.get('train_steps', 60), 
                                               initial_epoch=e-1, epochs=e,
                                               #validation_data=zip(validgen, validgen),
                                               #validation_steps=self.config.options.get('train_steps', 75)
@@ -114,11 +114,13 @@ class SkinApp(object):
         def Compile(mdl, i=1, *args, **kwargs): 
             print("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl), kwargs)
             if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
-                                 loss={'expression_out': kwargs.get('loss'), 'diagnosis_out': 'categorical_crossentropy'},
-                                 loss_weights={'expression_out': 1, 'diagnosis_out': 9})
+                                 loss={'expression_out': kwargs.get('loss'), 'diagnosis': 'categorical_crossentropy'},
+                                 loss_weights={'expression_out': 2, 'diagnosis': 8},
+                                 metrics={'diagnosis': 'categorical_accuracy'},
+                                 )
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             return mdl
-        models = [models[i] or Compile(mdl=built_models[i], i=i, optimizer='adadelta', loss='logcosh') for (i,x) in enumerate(built_models)]
+        models = [models[i] or Compile(mdl=built_models[i], i=i, optimizer='adam', loss='mse') for (i,x) in enumerate(built_models)]
         self.model = models
         autoencoder = models[0]
         
@@ -149,8 +151,10 @@ class SkinApp(object):
                     else: result = result.join(mode_func(models, fits), how='outer', rsuffix=str(totalfits))
                 except KeyboardInterrupt: fits = 0
                 #sampled, genelabels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE, 1000)) #resampling
+                checkpoint = self.config.options.get(config.SAVE_EVERY, 10)
+                tail_saves = self.config.options.get(config.SAVE_TAILS, False)
                 
-                if savepath and (not savepath is NotImplemented) and (not fits % 10 or 0 <= fits < 10): 
+                if savepath and (not savepath is NotImplemented) and (fits == 0 or (checkpoint > 0 and not fits % checkpoint) or (tail_saves and (0 <= fits < 10))): 
                     try: os.replace(savepath, savepath+'.backup')
                     except Exception: pass
                     
@@ -210,7 +214,7 @@ class SkinApp(object):
             except (IndexError, AttributeError):
                 action = NotImplemented
                 if not self.actionqueque:
-                    try: new_cmds = (str(input(curr_prompt)).split() or [None])
+                    try: new_cmds = [x.strip(' ') for x in (str(input(curr_prompt)).split(';'))] or [None]
                     except (KeyboardInterrupt, EOFError): action = None
                     self.actionqueque = coll.deque(new_cmds)
             curr_prompt = secondary
@@ -218,7 +222,7 @@ class SkinApp(object):
             
     def run(self, *args, **kwargs):
         mainloop = True
-        self.actionqueque.extend(kwargs.get('cmd', [None]))
+        self.actionqueque.extend(kwargs.get('cmd') or [])
         while mainloop:
             prompt = self.baseprompt.format(mdl=(('\n Currently loaded model: '+ str(self.modelpath))))
             action = str(self.get_input(prompt, '>>> ')).lower()
@@ -279,10 +283,13 @@ class SkinApp(object):
                 if _tmp: 
                     model = list(self.model or [None, None, None])
                     model[0] = _tmp
-                    #try: model[1] = keras.models.Model(keras.layers.Input(model[0].layers[0].input_shape), [x for x in model[0].layers if 'encoder' in x.name][-1](model[0].layers[0]))
-                    #except Exception as E: sys.excepthook(*sys.exc_info())
-                    #try: model[2] = keras.models.Model(model[0].layers[0], [x for x in model[0].layers if 'decoder' in x.name][-1](model[1].layers[-1]))
-                    #except Exception as E: sys.excepthook(*sys.exc_info())
+                    for i, newmod in enumerate(model):
+                        # load weights from the main network to subnetworks, if built
+                        if i == 0: continue
+                        try: 
+                            if newmod is not None: newmod.set_weights(model[0].get_weights())
+                        except Exception as E: 
+                            sys.excepthook(*sys.exc_info())
                     self.model = tuple(model)
                     self.modelpath = str(_tmp2)
                     self.config.options[config.LABEL_SAMPLE_SIZE] = self.model[0].input_shape[-1]
@@ -381,5 +388,4 @@ if __name__ == '__main__':
     argparser.add_argument('--cmd', nargs='*')
     argparser.add_argument('-v', '--verbose', action='store_true')
     args = vars(argparser.parse_args())
-    args['dir'] = args['dir'] or 'mag'
     sys.exit(main(**args))
