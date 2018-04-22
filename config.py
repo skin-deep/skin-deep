@@ -15,7 +15,7 @@ class MenuConfiguration(object):
                     ('list_cwd', False), 
                     ('model_depth', 3), 
                     ('drop_labels', False),
-                    ('compression_fac', 300),
+                    ('compression_fac', 400), #300/60ep@60st is decent enough
                     (SAVE_EVERY, 10),
                     (SAVE_TAILS, False),
                 )

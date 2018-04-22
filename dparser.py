@@ -80,15 +80,20 @@ def clean_xmls(parsed_input):
     cleaned = (x for x in parsed_input)
     cleaned = (fr.set_index('Accession') for fr in cleaned)
     cleaned = (get_patient_type(fr) for fr in cleaned)
-    #cleaned = (fr.transpose() for fr in cleaned)
     for clean_xml in cleaned:
         yield clean_xml
-
-def get_patient_type(dframe):
+        
+_key_cache = dict()
+def get_patient_type(dframe, keys=None):
     """Retrieves the label of the sample type from the Title field and returns it as a (new) dataframe."""
-    #return dframe['Title']
-    #print('TITLE IS: {}'.format(dframe['Title']))
-    return dframe.transform({'Title' : lambda x: x.split('_')[-2]}) # 2 for mag, 1 for mag2
+    print('TITLE IS: {}'.format(dframe['Title']))
+    keys = _key_cache.get('1')
+    keys = set(keys or input('Enter sample type regexes (semicolon-separated): ').strip().split(';'))
+    _key_cache.update({'1': keys})
+    print("CACHE: ", _key_cache)
+    transformed = dframe.transform({'Title' : lambda x: ("/".join([re.search(pat, str(x), flags=re.I).group() for pat in keys if re.search(pat, str(x), flags=re.I)] or ['<other>']))})
+    print(transformed)
+    return transformed
 
 def clean_data(raw_data):
     for datum in raw_data:
@@ -204,8 +209,8 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
     txt = txt or os.path.join(dir, '*.txt')
 
     # prepare 
-    labels = set()
-    labels = {'PP', 'PN', 'NN'} # DEBUG ONLY, REMOVEME!
+    labels = dict()
+    labels.update({str(lab).lower(): labels.get(lab) for lab in (v for v in set(*_key_cache.values()))})
     datastream = combo_pipeline(xml_path=xml, txt_path=txt)
     batches = fetch_batch(datastream)
     
@@ -235,14 +240,15 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
         return (next(train))
     
     drop_label = drop_labels
-    def nodrop_retrieve(pair): 
-        #labels.update([pair[0]]) # RESTOREME!
+    def nodrop_retrieve(pair):
+        try: labels.update({str(pair[0]).lower(): labels.get(str(pair[0]).lower())})
+        except ValueError: None if pair[0] in labels else sys.excepthook(*sys.exc_info())
+        #finally: print("PAIR 0 IS: {}".format([pair[0]]))
+            
         retrieved = pair[1]
         retrieved = retrieved.rename_axis(pair[0], axis=0)
         retrieved = retrieved.rename_axis(['Diagnosis'], axis=1)
         retrieved = retrieved.rename(columns=(lambda x: "{} ({})".format(pair[1].columns[0], pair[0])))
-        #retrieved = retrieved.rename(columns=(lambda x: "{}".format(pair[0])))
-        # return pair[1].rename({v : pair[1].index.name for v in pair[1].index.values})
         return retrieved
 
     retrieve_df = ((lambda x: x[1]) if drop_label 
@@ -298,23 +304,10 @@ def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
     nxt = nxt[0+(safe_size*offset):(safe_size*(offset+1))] if size <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
     safe_size = nxt.T.shape
     #out_generators[0] = itt.chain((nxt,), generators[0]) # return the sampled column for processing
-    out_generators[0] = itt.islice(generators[0], 0, None, 5)
-    #labels = nxt[geo.DATA_COLNAME].values
+    out_generators[0] = itt.islice(generators[0], 0, None, 5) # Debug; skips steps to ensure the model generalizes outside the training sequence
     labels = nxt.index.values
     
     if kwargs.get('verbose', True): print('LABELS PICKED: ', labels, '\n')
-    
-    # drop everything not picked in this sampling
-    #for i, gen in enumerate(generators):
-    #    #gen = (x.set_index(x[geo.DATA_COLNAME].values) for x in gen)
-    #    try:
-    #        gen = (map(lambda x: x.loc[labels], gen))
-    #        gen = (x.T for x in gen)
-    #        gen = (x.rename({v : x.index.name for v in x.index.values}) for x in gen)
-    #        #gen = (np.asarray(x.values) for x in gen)
-    #        #print("NXG:\n {}".format(next(gen).index))
-    #    except ValueError: pass
-    #    out_generators[i] = gen
     
     return out_generators, labels, safe_size
 
@@ -322,7 +315,8 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
     labels = labels or {}
     batch = kwargs.get('batch')
     #print("RAW: \n", predarray)
-    if batch is not None: print("BATCH: \n", batch)
+    #if batch is not None: print("BATCH: \n", batch)
+    if batch is not None: print("SAMPLE: ", batch.columns.values[-1])
     diagarray, topprob, diagnosis = np.array([predarray[1][-1]]), -1., None
     if labels: print("PROBABILITIES: ")
     for (labl, onehot) in labels.items():
@@ -330,11 +324,13 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
         print("{LAB}: {PROB}%".format(LAB=labl, PROB=(guess or '<0.01')))
         if guess > topprob: diagnosis, topprob = labl, guess
         #print(guess, topprob, diagnosis)
-    predarray = pd.Series(predarray[0].flatten(), name="{}=>({})".format(batch.columns[0], diagnosis)).to_frame()
+    predarray = pd.Series(predarray[0].flatten(), name="{}=>({} @{}%)".format(batch.columns[0], diagnosis, np.round(topprob, 0))).to_frame()
     genelabels = kwargs.get('genes')
+    diff = pd.Series(np.subtract(predarray.values, batch.values).flatten()).rename('diff for {}'.format(batch.columns.values[-1])).to_frame().set_index(genelabels)
+    print(diff)
     if genelabels is not None: predarray = predarray.set_index(genelabels)
     #print("PROCESSED: \n\n", predarray)
-    predarray = pd.concat({'original':batch, 'predicted':predarray}, axis=1)
+    predarray = pd.concat({'original':batch, 'predicted':predarray, 'diff':diff}, axis=1)
     print('---'*30)
     return predarray
     

@@ -122,7 +122,7 @@ class labeled_AE(deep_AE):
     @classmethod
     def input_preprocessing(cls, input_lay, *args, **kwargs):
         transformed = input_lay
-        transformed = cls.DLbackend.layers.AlphaDropout(0.15)(transformed)
+        transformed = cls.DLbackend.layers.AlphaDropout(0.35)(transformed) #0.15 works
         return transformed
         
     @classmethod
@@ -147,32 +147,33 @@ class labeled_AE(deep_AE):
         last_lay = cls.input_preprocessing(last_lay, **kwargs)
         
         for (i, siz) in enumerate(lay_sizes):
-            print(siz or "NONE!")
-            encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i))
+            print(str(i)+':', siz or "NONE!")
+            encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i),
+                                                        kernel_regularizer=cls.DLbackend.regularizers.l1_l2(l1=0.01, l2=0.05)
+                                                     )
             last_lay = encoder_node(last_lay)
         else: enc_out_layer = last_lay
         
         Encoder = cls.DLmodel(inbound, enc_out_layer, name='Encoder')
         
         # Diagnostician: compressed vals -> class
-        #import numpy as np
-        print("MOD LABEL:\n ", labels)
-        #labels = np.array(labels)
         # 'interface' layer for inspecting latent spaces as a predictive ensemble
         ensemble_inputs = {enc_out_layer}
         interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', 650), activation='linear', activity_regularizer=cls.DLbackend.regularizers.l1(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
         for assay_latent_space in ensemble_inputs:
             # corrupt each input separately
-            diagger_inp = cls.DLbackend.layers.AlphaDropout(0.15)(assay_latent_space)
+            diagger_inp = cls.DLbackend.layers.AlphaDropout(0.25)(assay_latent_space)
             # connect the interface layer to each input
             diagger = interface_node(diagger_inp)
         #diagger = cls.DLbackend.layers.Dense(100, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='diagger_{}'.format(1))(diagger)
-        diagnosis = cls.DLbackend.layers.Dense(3, activation=activators.get('classification', 'softmax'), kernel_initializer='lecun_normal', name='diagnosis')(diagger)
+        diagnosis = cls.DLbackend.layers.Dense(3, activation=activators.get('classification', 'softmax'), 
+                                                kernel_initializer='lecun_normal', kernel_regularizer=cls.DLbackend.regularizers.l1(0.1),
+                                                name='diagnosis')(diagger)
         
         # Decoder: compressed vals -> regression vals
         dec_start = None
         for (i, siz) in enumerate(reversed(lay_sizes[:-1])):
-            print(i, siz)
+            #print(i, siz)
             decoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
             decoded = decoder_node(last_lay)
             last_lay = decoded
@@ -197,7 +198,9 @@ def build_models(datashape, which='labeledAE', activators=None, **kwargs):
     print(kwargs.get('labels'))
     model_to_build = which if isinstance(which, ExpressionModel) else model_dict.get(which, NotImplemented)
     if model_to_build is NotImplemented: raise NotImplementedError
-    return model_to_build(datashape, activators, **kwargs)
+    built = model_to_build(datashape, activators, **kwargs)
+    print("Built model: {}".format(built))
+    return built
     
 def main(datashape=None, which_model=None):
     datashape = datashape or eval(input('Enter datashape: '))
