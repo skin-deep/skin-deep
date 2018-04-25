@@ -69,6 +69,8 @@ class SkinApp(object):
                                                        drop_labels=self.config.options.get('drop_labels', False),
                                                        )
         sampled, genelabels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE))
+        global _encoding
+        _encoding = catlabels # TEMPORARY
         
         def predfunc(models):
             batch = next(sampled[0])
@@ -173,7 +175,7 @@ class SkinApp(object):
         except (NameError, TypeError): import model_defs
         Models = model_defs
         #Logger.log_params('App build_models kwargs: ', kwargs)
-        built = Models.build_models(datashape, labels=labels, compression_fac=compression_fac, activators=activators, **kwargs)
+        built = Models.build_models(datashape, labels=labels, compression_fac=compression_fac, activators=activators, num_classes=len(_encoding), **kwargs)
         return built
     
     def load_model(self, *args, model_path=NotImplemented, **kwargs):

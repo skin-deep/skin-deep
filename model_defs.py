@@ -166,7 +166,7 @@ class labeled_AE(deep_AE):
             # connect the interface layer to each input
             diagger = interface_node(diagger_inp)
         #diagger = cls.DLbackend.layers.Dense(100, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='diagger_{}'.format(1))(diagger)
-        diagnosis = cls.DLbackend.layers.Dense(3, activation=activators.get('classification', 'softmax'), 
+        diagnosis = cls.DLbackend.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
                                                 kernel_initializer='lecun_normal', kernel_regularizer=cls.DLbackend.regularizers.l1(0.1),
                                                 name='diagnosis')(diagger)
         
