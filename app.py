@@ -11,6 +11,7 @@ Models = NotImplemented # deferred loading to save on keras bootup time; module-
 import dparser as geo
 geo._key_cache = dict() #clean run
 import config
+import project_logging as Logger
         
 
 class SkinApp(object):    
@@ -71,7 +72,7 @@ class SkinApp(object):
         
         def predfunc(models):
             batch = next(sampled[0])
-            #print(batch)
+            #Logger.log_params(batch)
             orig_vals = np.array(batch.T.values, dtype='float32')
             prediction = models[config.which_model].predict_on_batch([batch.T])
             prediction = geo.parse_prediction(prediction, catlabels, batch=batch, genes=genelabels)
@@ -104,7 +105,7 @@ class SkinApp(object):
                     }.get(mode)
         
         built_models = [None for x in range(self.config.options.get('model_amt', 3))]
-        print("SIZE: ", size)
+        Logger.log_params("SIZE: " + str(size))
         if models is None or not all(models): 
             print(built_models)
             built_models = self.build_models(datashape=size, labels=np.array(tuple(catlabels.values())[-1]),
@@ -114,7 +115,7 @@ class SkinApp(object):
                                             )
         
         def Compile(mdl, i=1, *args, **kwargs): 
-            print("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl), kwargs)
+            Logger.log_params("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl) + str(kwargs))
             if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
                                  loss={'expression_out': kwargs.get('loss'), 'diagnosis': 'categorical_crossentropy'},
                                  loss_weights={'expression_out': 2, 'diagnosis': 8},
@@ -171,7 +172,7 @@ class SkinApp(object):
         try: Reimport(models)
         except (NameError, TypeError): import model_defs
         Models = model_defs
-        #print('App build_models kwargs: ', kwargs)
+        #Logger.log_params('App build_models kwargs: ', kwargs)
         built = Models.build_models(datashape, labels=labels, compression_fac=compression_fac, activators=activators, **kwargs)
         return built
     
@@ -201,7 +202,7 @@ class SkinApp(object):
                 loaded_path = model_path
             except Exception as Err:
                 if kwargs.get('verbose'): sys.excepthook(*sys.exc_info())
-                print("\n\nModel could not be loaded from path {}!".format(loaded_path))
+                Logger.log_params("\n\nModel could not be loaded from path {}!".format(loaded_path))
             return model, loaded_path
             
     def get_input(self, prompt='>>> ', secondary='>>> '):
@@ -297,7 +298,7 @@ class SkinApp(object):
                     self.modelpath = str(_tmp2)
                     if self.config.options.get('verbose'): print(self.model[0].summary())
                     #self.config.options[config.LABEL_SAMPLE_SIZE] = self.model[0].input_shape[-1]
-                    print("Model loaded successfully.")
+                    Logger.log_params("Model loaded successfully.")
             
             if action in self.modes[self.ACT_SAVE]:
                 if self.model[0]:
@@ -306,8 +307,8 @@ class SkinApp(object):
                     if savepath: 
                         self.model[0].save(savepath)
                         self.modelpath = savepath
-                        print('Model successfully saved to {}.'.format(savepath))
-                else: print('Model not currenly loaded.')
+                        Logger.log_params('Model successfully saved to {}.'.format(savepath))
+                else: Logger.log_params('Model not currenly loaded.')
                 
             if action in self.modes[self.ACT_DROP]:
                 self.model = None

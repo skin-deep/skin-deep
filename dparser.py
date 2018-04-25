@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 import itertools as itt
 import re
 
+import project_logging as Logger
+
 DATA_COLNAME = 'Target'
 
 def ask_for_files():
@@ -90,7 +92,7 @@ def get_patient_type(dframe, keys=None):
     keys = _key_cache.get('1')
     keys = set(keys or input('Enter sample type regexes (semicolon-separated): ').strip().split(';'))
     _key_cache.update({'1': keys})
-    print("CACHE: ", _key_cache)
+    Logger.log_params("CACHE: " + str(_key_cache))
     transformed = dframe.transform({'Title' : lambda x: ("/".join([re.search(pat, str(x), flags=re.I).group() for pat in keys if re.search(pat, str(x), flags=re.I)] or ['<other>']))})
     print(transformed)
     return transformed
@@ -283,9 +285,9 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
     from keras.utils import to_categorical as categ_encode
     category_indices = np.array(tuple(labels.keys()), dtype=int).T
     encoding = categ_encode(category_indices)
-    print("Encoding: ", encoding)
+    Logger.log_params("Encoding: {}".format(encoding), to_print=True)
     labels = {labels[i]:np.array([encoding[i]]) for (i,k) in enumerate(labels)}
-    print("Labels: ", labels)
+    Logger.log_params("Labels: {}".format(labels), to_print=True)
     
     mode = kwargs.get('mode', 'train')
     datagen = {'train': lambda: (train, train), 
@@ -318,10 +320,10 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
     #if batch is not None: print("BATCH: \n", batch)
     if batch is not None: print("SAMPLE: ", batch.columns.values[-1])
     diagarray, topprob, diagnosis = np.array([predarray[1][-1]]), -1., None
-    if labels: print("PROBABILITIES: ")
+    if labels: Logger.log_params("PROBABILITIES: ")
     for (labl, onehot) in labels.items():
         guess = np.round(np.nanmax(onehot*diagarray)*100, 2)
-        print("{LAB}: {PROB}%".format(LAB=labl, PROB=(guess or '<0.01')))
+        Logger.log_params("{LAB}: {PROB}%".format(LAB=labl, PROB=(guess or '<0.01')))
         if guess > topprob: diagnosis, topprob = labl, guess
         #print(guess, topprob, diagnosis)
     predarray = pd.Series(predarray[0].flatten(), name="{}=>({} @{}%)".format(batch.columns[0], diagnosis, np.round(topprob, 0))).to_frame()
@@ -331,7 +333,7 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
     if genelabels is not None: predarray = predarray.set_index(genelabels)
     #print("PROCESSED: \n\n", predarray)
     predarray = pd.concat({'original':batch, 'predicted':predarray, 'diff':diff}, axis=1)
-    print('---'*30)
+    Logger.log_params('---'*30)
     return predarray
     
 def main(xml=None, txt=None, verbose=None, *args, **kwargs):
