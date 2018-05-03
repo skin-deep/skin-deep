@@ -9,13 +9,13 @@ which_model = 0 # TEMPORARY VAR, REMOVE ME!
 
 class MenuConfiguration(object):
     defaults =  (
-                    ('train_steps', 60), 
-                    ('test_steps', 5), 
+                    ('train_steps', 30), 
+                    ('test_steps', 15), 
                     (LABEL_SAMPLE_SIZE, None), 
                     ('list_cwd', False), 
                     ('model_depth', 3), 
                     ('drop_labels', False),
-                    ('compression_fac', 400), #300/60ep@60st is decent enough
+                    ('compression_fac', 500), #300/60ep@60st is decent enough
                     (SAVE_EVERY, 10),
                     (SAVE_TAILS, False),
                 )

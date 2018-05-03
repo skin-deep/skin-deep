@@ -10,10 +10,10 @@ def log_params(logstr, dest='', to_print=True, *args, **kwargs):
         except Exception:
             sys.excepthook(*sys.exc_info())
             print('\nCould not create the log directory!')
-    logfname = "{main}{addons}".format(main='log', addons='')
+    logfname = "{main}{addons}.txt".format(main='log', addons='')
     logfp = os.path.join(dest, logfname)
     with open(logfp, 'a') as log:
-        log.write("[{timestamp}]: ".format(timestamp=datetime.datetime.utcnow().isoformat()))
+        log.write("\n[{timestamp}]: ".format(timestamp=datetime.datetime.utcnow().isoformat()))
         log.write("{logged}".format(logged=logstr))
         if to_print: print(logstr)
 

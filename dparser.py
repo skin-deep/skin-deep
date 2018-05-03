@@ -21,7 +21,7 @@ def ask_for_files():
 
 # parsers
 def parse_datasets(files=None, verbose=False, *args, **kwargs):
-    files = glob.glob(files) if files else files
+    files = glob.iglob(files) if files else files
     if not files: 
         if verbose: files = ask_for_files()
     for filepath in files:
@@ -78,22 +78,29 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
     return data
 
 # Low-level, intra-dataset cleaning logic.
-def clean_xmls(parsed_input):
+def clean_xmls(parsed_input, *args, **kwargs):
     cleaned = (x for x in parsed_input)
     cleaned = (fr.set_index('Accession') for fr in cleaned)
-    cleaned = (get_patient_type(fr) for fr in cleaned)
+    cleaned = (get_patient_type(fr, keys=kwargs.get('category_regexes')) for fr in cleaned)
     for clean_xml in cleaned:
         yield clean_xml
         
 _key_cache = dict()
-def get_patient_type(dframe, keys=None):
+def get_patient_type(dframe, keys=None, **kwargs):
     """Retrieves the label of the sample type from the Title field and returns it as a (new) dataframe."""
     print('TITLE IS: {}'.format(dframe['Title']))
-    keys = _key_cache.get('1')
-    keys = set(keys or input('Enter sample type regexes (semicolon-separated): ').strip().split(';'))
-    _key_cache.update({'1': keys})
+    print('KEYS: {}'.format(keys))
+    keys = keys or _key_cache.get('1')
+    #keys = tuple(keys.values()) if isinstance(keys, dict) else keys
+    keys = set(keys or input('Enter sample type regexes (comma-separated): ').strip().split(','))
+    labels = kwargs.get('labels') or {} #or {'Severe':'PP', 'Mild':'PN', 'Normal':'NN'}
+    labels = {str(k).upper(): v for k,v in labels.items()} # standardize keys
+    keys = {k: labels.get(str(k).upper(), k) for k in keys}
+    _key_cache['1'] = keys
     Logger.log_params("CACHE: " + str(_key_cache))
-    transformed = dframe.transform({'Title' : lambda x: ("/".join([re.search(pat, str(x), flags=re.I).group() for pat in keys if re.search(pat, str(x), flags=re.I)] or ['<other>']))})
+
+    transformed = dframe.transform({'Title' : lambda x: ("/".join(keys.get(pat, 'ERROR') for pat in keys if re.search(pat, str(x), flags=re.I)) or '<other>')})
+    #transformed =  #filter out unlabelled?
     print(transformed)
     return transformed
 
@@ -106,7 +113,7 @@ def clean_data(raw_data):
 # Higher-level logic for integration
 def xml_pipeline(path=None, *args, **kwargs):
     raw_parse = parse_miniml(path or '*.xml', *args, **kwargs)
-    cleaned = clean_xmls(raw_parse)
+    cleaned = clean_xmls(raw_parse, *args, **kwargs)
     return cleaned
    
 def txt_pipeline(path=None, *args, **kwargs):
@@ -141,6 +148,7 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
 
     print("\nFound {} datafiles. \n".format(count))
     if count < 1: raise FileNotFoundError
+    #input("DEBUG: Continue?")
         
         
 
@@ -211,9 +219,9 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
     txt = txt or os.path.join(dir, '*.txt')
 
     # prepare 
-    labels = dict()
-    labels.update({str(lab).lower(): labels.get(lab) for lab in (v for v in set(*_key_cache.values()))})
-    datastream = combo_pipeline(xml_path=xml, txt_path=txt)
+    categories = dict()
+    categories.update(_key_cache)
+    datastream = combo_pipeline(xml_path=xml, txt_path=txt, **kwargs)
     batches = fetch_batch(datastream)
     
     if DEBUG == '1':
@@ -243,8 +251,8 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
     
     drop_label = drop_labels
     def nodrop_retrieve(pair):
-        try: labels.update({str(pair[0]).lower(): labels.get(str(pair[0]).lower())})
-        except ValueError: None if pair[0] in labels else sys.excepthook(*sys.exc_info())
+        try: categories.update({str(pair[0]).upper(): categories.get(str(pair[0]).upper())})
+        except ValueError: None if str(pair[0]).upper() in categories else sys.excepthook(*sys.exc_info())
         #finally: print("PAIR 0 IS: {}".format([pair[0]]))
             
         retrieved = pair[1]
@@ -279,44 +287,48 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
             else: ntrain.to_csv(savepath)
         return (ntrain)
         
-    # turn labels into indices:
-    labels = dict(enumerate(sorted(labels)))
-    # one-hot the labels:
+    # turn categories into indices:
+    Logger.log_params("Raw categories: {}".format(categories), to_print=True)
+    categories = dict(enumerate(sorted(categories)))
+    # one-hot the categories:
     from keras.utils import to_categorical as categ_encode
-    category_indices = np.array(tuple(labels.keys()), dtype=int).T
+    category_indices = np.array(tuple(categories.keys()), dtype=int).T
     encoding = categ_encode(category_indices)
-    Logger.log_params("Encoding: {}".format(encoding), to_print=True)
-    labels = {labels[i]:np.array([encoding[i]]) for (i,k) in enumerate(labels)}
-    Logger.log_params("Labels: {}".format(labels), to_print=True)
+    Logger.log_params("Encoding: \n{}".format(encoding), to_print=True)
+    categories = {categories[i]:np.array([encoding[i]]) for (i,k) in enumerate(categories)}
+    Logger.log_params("Categories: {}".format(categories), to_print=True)
     
-    mode = kwargs.get('mode', 'train')
+    mode = 'cross'#kwargs.get('mode', 'train')
     datagen = {'train': lambda: (train, train), 
             'test': lambda: (test, test), 
             'cross': lambda: (train, test),}.get(mode, lambda: None)()
-    return datagen, labels
+    return datagen, categories
     
 def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
     #print(generators)
     out_generators = [None for _ in range(len(generators))]
-    nxt = next(generators[0])
-    #print(nxt)
-    size = nxt.size # sample the data for size
-    samplesize = samplesize or size # None input - do not subsample
-    safe_size = min(size, samplesize)
-    nxt = nxt[0+(safe_size*offset):(safe_size*(offset+1))] if size <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
-    safe_size = nxt.T.shape
-    #out_generators[0] = itt.chain((nxt,), generators[0]) # return the sampled column for processing
-    out_generators[0] = itt.islice(generators[0], 0, None, 5) # Debug; skips steps to ensure the model generalizes outside the training sequence
-    labels = nxt.index.values
     
-    if kwargs.get('verbose', True): print('LABELS PICKED: ', labels, '\n')
+    for i, gen in enumerate(generators):
+        nxt = next(generators[i])
+        #print(nxt)
+        size = nxt.size # sample the data for size
+        samplesize = samplesize or size # None input - do not subsample
+        safe_size = min(size, samplesize)
+        nxt = nxt[0+(safe_size*offset):(safe_size*(offset+1))] if size <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
+        safe_size = nxt.T.shape
+        #out_generators[i] = itt.chain((nxt,), generators[i]) # return the sampled column for processing
+        import random
+        out_generators[i] = itt.islice(generators[i], 0, None, random.choice(list(range(1,4)))) # Debug; skips steps to ensure the model generalizes outside the training sequence
+        labels = nxt.index.values
+    
+        if kwargs.get('verbose', True): print('LABELS PICKED: ', labels, '\n')
     
     return out_generators, labels, safe_size
 
 def parse_prediction(predarray, labels=None, *args, **kwargs):
     labels = labels or {}
     batch = kwargs.get('batch')
-    #print("RAW: \n", predarray)
+    Logger.log_params("RAW: \n{}".format(predarray))
     #if batch is not None: print("BATCH: \n", batch)
     if batch is not None: print("SAMPLE: ", batch.columns.values[-1])
     diagarray, topprob, diagnosis = np.array([predarray[1][-1]]), -1., None

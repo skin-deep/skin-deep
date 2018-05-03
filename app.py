@@ -61,45 +61,44 @@ class SkinApp(object):
     def run_model(self, models=None, verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
         mode = kwargs.get('mode', 'train')
         
-        _chc = geo._key_cache
-        Reimport(geo)
-        geo._key_cache = _chc
+        catprompt = 'Enter sample type regexes (comma-separated) or leave blank to use cached: '
+        cat_regexes = (kwargs.get('category_regexes') 
+                        or {rgx for rgx in (self.get_input(catprompt) or '').strip().split(',') if rgx}
+                        or tuple(geo._key_cache.values())
+                       )
+        Reimport(geo) # drops the cache...
         datagen, catlabels = geo.build_datastreams_gen(xml=xml, txt=txt, dir=dir, 
                                                        mode=mode, debug=False,
                                                        drop_labels=self.config.options.get('drop_labels', False),
+                                                       category_regexes=cat_regexes, # ...but we're restoring/resetting it here (indirectly)
                                                        )
         sampled, genelabels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE))
+        
+        # Ugly debug hacks:
+        if np.max(size) > 60000: raise RuntimeError('Unsafe size!') # debug - prevents crashes due to OOM
         global _encoding
-        _encoding = catlabels # TEMPORARY
+        _encoding = catlabels # TEMPORARY, MEMOs THE LABELS
+        import model_defs
+        model_type = model_defs.labeled_AE
         
         def predfunc(models):
             batch = next(sampled[0])
             #Logger.log_params(batch)
             orig_vals = np.array(batch.T.values, dtype='float32')
             prediction = models[config.which_model].predict_on_batch([batch.T])
+            Logger.log_params("Actual type: {}".format(str(batch.index.name)))
             prediction = geo.parse_prediction(prediction, catlabels, batch=batch, genes=genelabels)
             return prediction
             
         def trainfunc(models, e=1):
-            batchgen = (({
-                         'expression_in': np.array(x.T.values),
-                         #'expression_in_2': np.array(x.T.values),
-                         'diagnosis_in': np.array(catlabels.get(str(x.index.name).lower())),
-                        },
-                        {
-                         'expression_out': np.array(x.T.values),
-                         'diagnosis': np.array(catlabels.get(str(x.index.name).lower())),
-                         #'DiagBoost': np.array(catlabels.get(x.index.name))
-                        })
-                         for x in sampled[0])
-            #validgen = itt.cycle([np.asarray([next(sampled[1]).values], dtype='float32') for x in range(self.config.options.get('train_steps', 75))])
-            history = models[0].fit_generator(
-                                              batchgen,
-                                              steps_per_epoch=self.config.options.get('train_steps', 60), 
-                                              initial_epoch=e-1, epochs=e,
-                                              #validation_data=zip(validgen, validgen),
-                                              #validation_steps=self.config.options.get('train_steps', 75)
-                                              )
+            trained_model = models[0]
+            history = trained_model.fit_generator(
+                                                  model_type.batchgen(source=sampled[0], catlabels=catlabels),
+                                                  steps_per_epoch=self.config.options.get('train_steps', 60), 
+                                                  initial_epoch=e-1, epochs=e,
+                                                  validation_data=model_type.batchgen(source=sampled[1], catlabels=catlabels),
+                                                  validation_steps=self.config.options.get('train_steps', 60),
+                                                  )
             return history
             
         mode_func = {'test': lambda x, e: (predfunc(x)),
@@ -110,10 +109,10 @@ class SkinApp(object):
         Logger.log_params("SIZE: " + str(size))
         if models is None or not all(models): 
             print(built_models)
-            built_models = self.build_models(datashape=size, labels=np.array(tuple(catlabels.values())[-1]),
+            built_models = self.build_models(datashape=size, kind=model_type, labels=np.array(tuple(catlabels.values())),
                                             compression_fac=self.config.options.get('compression_fac', 512),
                                             depth=self.config.options.get('model_depth', 3),
-                                            activators=self.config.options.get('activators')
+                                            activators=self.config.options.get('activators'),
                                             )
         
         def Compile(mdl, i=1, *args, **kwargs): 
@@ -170,11 +169,11 @@ class SkinApp(object):
         return (models, result, savepath)
 
     @classmethod
-    def build_models(cls, datashape, labels=None, compression_fac=1024, activators=None, **kwargs):
+    def build_models(cls, datashape, kind=None, labels=None, compression_fac=512, activators=None, **kwargs):
         try: Reimport(models)
         except (NameError, TypeError): import model_defs
         Models = model_defs
-        #Logger.log_params('App build_models kwargs: ', kwargs)
+        Logger.log_params('App build_models args: {}'.format(", ".join(map(str, [datashape, kind, labels, compression_fac, kwargs]))))
         built = Models.build_models(datashape, labels=labels, compression_fac=compression_fac, activators=activators, num_classes=len(_encoding), **kwargs)
         return built
     
@@ -300,6 +299,7 @@ class SkinApp(object):
                     self.modelpath = str(_tmp2)
                     if self.config.options.get('verbose'): print(self.model[0].summary())
                     #self.config.options[config.LABEL_SAMPLE_SIZE] = self.model[0].input_shape[-1]
+                    Logger.log_params("Loading {}".format(self.modelpath), to_print=False)
                     Logger.log_params("Model loaded successfully.")
             
             if action in self.modes[self.ACT_SAVE]:
