@@ -39,9 +39,9 @@ class ExpressionModel(object):
         
         return whole
         
-    def custom_loss(cls, *args, **kwargs):
-        """Special loss function required for the particular model."""
-        return None
+    #def custom_loss(cls, *args, **kwargs):
+    #    """Special loss function required for the particular model."""
+    #    return None
         
     @staticmethod
     def batchgen(source, catlabels): 
@@ -240,19 +240,11 @@ class labeled_AE(deep_AE):
         
 class variational_deep_AE(deep_AE):
 
-    def custom_loss(inp, outp):
-        """Axis-wise KL-Div + MSE"""
-        K = cls.DLbackend.backend
-        reconstruction_loss = K.sum(K.square(outp-inp))
-        kl_loss = - 0.5 * K.sum(1 + log_stddev - K.square(mean) - K.square(K.exp(log_stddev)), axis=-1)
-        total_loss = K.mean(reconstruction_loss + kl_loss)    
-        return total_loss
-
     def build(cls, datashape, activators=None, compression_fac=None, **kwargs):
         activators = activators or {'deep': 'selu', 'regression': 'linear'}
         uncompr_size, compr_size = cls.calculate_sizes(datashape, compression_fac)
         # deep levels handling:
-        deep_lvls = 1 or kwargs.get('depth', 1)
+        deep_lvls = kwargs.get('depth', 1)
         try: deep_lvls = max(1, abs(int(deep_lvls)))
         except Exception: deep_lvls = 1
         
@@ -275,14 +267,15 @@ class variational_deep_AE(deep_AE):
             last_lay = encoder_node(last_lay)
         else:
             # VAE stuff:
-            def sampler(mean, log_stddev):
-                K = cls.DLbackend.backend
-                std_norm = K.random_normal(shape=(K.shape(mean)[0], latent_size), mean=0, stddev=1)
-                return mean + K.exp(log_stddev) * std_norm
-            
             latent_dims = 2
             enc_mean = cls.DLbackend.layers.Dense(latent_dims, name='encoded_mean'.format())(last_lay)
             enc_stdev = cls.DLbackend.layers.Dense(latent_dims, name='encoded_log-stdev'.format())(last_lay)
+            
+            def sampler(mean, log_stddev):
+                import keras.backend as K
+                std_norm = K.random_normal(shape=(K.shape(mean)[0], latent_dims), mean=0, stddev=1)
+                return mean + K.exp(log_stddev) * std_norm
+            
             latent_vector = Lambda(sampler)([enc_mean, enc_logstdev])
             
             # encoder output layer:
@@ -318,8 +311,16 @@ class variational_deep_AE(deep_AE):
         dec_start = dec_start or decoder_node
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
-        
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Predictor')
+        
+        def VAE_loss(inp, outp):
+            """Axis-wise KL-Div + MSE"""
+            import keras.backend as K
+            reconstruction_loss = K.sum(K.square(outp-inp))
+            kl_loss = - 0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
+            total_loss = K.mean(reconstruction_loss + kl_loss)    
+            return total_loss
+        Autoencoder.custom_loss = VAE_loss
 
         return (Autoencoder, Encoder, Diagnostician)
         

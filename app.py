@@ -138,7 +138,7 @@ class SkinApp(object):
         def Compile(mdl, i=1, *args, **kwargs): 
             Logger.log_params("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl) + str(kwargs))
             if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
-                                 loss={'diagnosis': 'categorical_crossentropy', 'expression_out': model_type.custom_loss or kwargs.get('loss'), },
+                                 loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
                                  loss_weights={'diagnosis': 8, 'expression_out': 2, },
                                  metrics={'diagnosis': 'categorical_accuracy'},
                                  )
