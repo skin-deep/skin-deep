@@ -39,6 +39,10 @@ class ExpressionModel(object):
         
         return whole
         
+    def custom_loss(cls, *args, **kwargs):
+        """Special loss function required for the particular model."""
+        return None
+        
     @staticmethod
     def batchgen(source, catlabels): 
         """Defines data to retrieve from inputs on a per-model basis.
@@ -137,16 +141,18 @@ class deep_AE(ExpressionModel):
         :param catlabels: category labels
         """
         import numpy as np
+        from keras.utils import normalize as K_norm
         batch = (
                 ({
-                 'expression_in': np.array(x.T.values),
+                 'expression_in': K_norm(np.array(x.T.values), order=1),
                  'diagnosis_in': np.array(catlabels.get(str(x.index.name).upper())),
                 },
                 {
-                 'expression_out': np.array(x.T.values),
+                 'expression_out': K_norm(np.array(x.T.values), order=1),
                  'diagnosis': np.array(catlabels.get(str(x.index.name).upper())),
                 })
                 for x in source)
+        #print ("BATCH GEN B: ", next(batch))
         return batch
 
         
@@ -161,7 +167,7 @@ class labeled_AE(deep_AE):
     @classmethod
     def input_preprocessing(cls, input_lay, *args, **kwargs):
         transformed = input_lay
-        transformed = cls.DLbackend.layers.AlphaDropout(0.35)(transformed)
+        transformed = cls.DLbackend.layers.AlphaDropout(0.5)(transformed)
         return transformed
         
     @classmethod
@@ -188,7 +194,7 @@ class labeled_AE(deep_AE):
         for (i, siz) in enumerate(lay_sizes):
             print(str(i)+':', siz or "NONE!")
             encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i),
-                                                        kernel_regularizer=cls.DLbackend.regularizers.l1_l2(l1=0.01, l2=0.05)
+                                                        kernel_regularizer=cls.DLbackend.regularizers.l1_l2(l1=0.01, l2=0.01)
                                                      )
             last_lay = encoder_node(last_lay)
         else: enc_out_layer = last_lay
@@ -198,10 +204,10 @@ class labeled_AE(deep_AE):
         # Diagnostician: compressed vals -> class
         # 'interface' layer for inspecting latent spaces as a predictive ensemble
         ensemble_inputs = {enc_out_layer}
-        interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', 650), activation='linear', activity_regularizer=cls.DLbackend.regularizers.l1(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
+        interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', lay_sizes[-1]), activation='linear', activity_regularizer=cls.DLbackend.regularizers.l2(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
         for assay_latent_space in ensemble_inputs:
             # corrupt each input separately
-            diagger_inp = cls.DLbackend.layers.AlphaDropout(0.25)(assay_latent_space)
+            diagger_inp = cls.DLbackend.layers.AlphaDropout(0.1)(assay_latent_space)
             # connect the interface layer to each input
             diagger = interface_node(diagger_inp)
         #diagger = cls.DLbackend.layers.Dense(100, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='diagger_{}'.format(1))(diagger)
@@ -232,13 +238,21 @@ class labeled_AE(deep_AE):
         return (Autoencoder, Encoder, Diagnostician)
         
         
-class VAE(deep_AE):
+class variational_deep_AE(deep_AE):
+
+    def custom_loss(inp, outp):
+        """Axis-wise KL-Div + MSE"""
+        K = cls.DLbackend.backend
+        reconstruction_loss = K.sum(K.square(outp-inp))
+        kl_loss = - 0.5 * K.sum(1 + log_stddev - K.square(mean) - K.square(K.exp(log_stddev)), axis=-1)
+        total_loss = K.mean(reconstruction_loss + kl_loss)    
+        return total_loss
 
     def build(cls, datashape, activators=None, compression_fac=None, **kwargs):
         activators = activators or {'deep': 'selu', 'regression': 'linear'}
         uncompr_size, compr_size = cls.calculate_sizes(datashape, compression_fac)
         # deep levels handling:
-        deep_lvls = kwargs.get('depth', 1)
+        deep_lvls = 1 or kwargs.get('depth', 1)
         try: deep_lvls = max(1, abs(int(deep_lvls)))
         except Exception: deep_lvls = 1
         
@@ -253,17 +267,27 @@ class VAE(deep_AE):
         
         last_lay = cls.input_preprocessing(last_lay, **kwargs)
         
-        for (i, siz) in enumerate(lay_sizes):
+        
+        
+        for (i, siz) in enumerate(lay_sizes[:-1]):
             print(str(i)+':', siz or "NONE!")
             encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i))
             last_lay = encoder_node(last_lay)
-        else: 
+        else:
             # VAE stuff:
-            enc_mean = cls.DLbackend.layers.Dense(lay_sizes[-1], name='encoded_mean'.format())(last_lay)
-            enc_logv = cls.DLbackend.layers.Dense(lay_sizes[-1], name='encoded_log-var'.format())(last_lay)
+            def sampler(mean, log_stddev):
+                K = cls.DLbackend.backend
+                std_norm = K.random_normal(shape=(K.shape(mean)[0], latent_size), mean=0, stddev=1)
+                return mean + K.exp(log_stddev) * std_norm
             
-            enc_out_layer = last_lay
-        
+            latent_dims = 2
+            enc_mean = cls.DLbackend.layers.Dense(latent_dims, name='encoded_mean'.format())(last_lay)
+            enc_stdev = cls.DLbackend.layers.Dense(latent_dims, name='encoded_log-stdev'.format())(last_lay)
+            latent_vector = Lambda(sampler)([enc_mean, enc_logstdev])
+            
+            # encoder output layer:
+            enc_out_layer = latent_vector
+            
         Encoder = cls.DLmodel(inbound, enc_out_layer, name='Encoder')
         
         # Diagnostician: compressed vals -> class
@@ -275,7 +299,7 @@ class VAE(deep_AE):
             diagger_inp = cls.DLbackend.layers.AlphaDropout(0.25)(assay_latent_space)
             # connect the interface layer to each input
             diagger = interface_node(diagger_inp)
-        #diagger = cls.DLbackend.layers.Dense(100, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='diagger_{}'.format(1))(diagger)
+            
         diagnosis = cls.DLbackend.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
                                                 kernel_initializer='lecun_normal', kernel_regularizer=cls.DLbackend.regularizers.l1(0.1),
                                                 name='diagnosis')(diagger)
@@ -296,11 +320,28 @@ class VAE(deep_AE):
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
         
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Predictor')
-        # dummy input for feeding into Decoder separately
-        #dummy_in = cls.DLbackend.layers.Input([Encoder.layers[-1].output_shape[-1]])
-        #Decoder = cls.DLmodel(dummy_in, dec_start(dummy_in), name='Decoder') #this is bullshit rn
 
         return (Autoencoder, Encoder, Diagnostician)
+        
+    @staticmethod
+    def batchgen(source, catlabels): 
+        """Defines data to retrieve from inputs on a per-model basis.
+        :param source: an iterable of data
+        :param catlabels: category labels
+        """
+        import numpy as np
+        from keras.utils import normalize as K_norm
+        batch = (
+                ({
+                 'expression_in': K_norm(np.array(x.T.values), order=1),
+                 'diagnosis_in': np.array(catlabels.get(str(x.index.name).upper())),
+                },
+                {
+                 'expression_out': K_norm(np.array(x.T.values), order=1),
+                 'diagnosis': np.array(catlabels.get(str(x.index.name).upper())),
+                })
+                for x in source)
+        return batch
     
 def build_models(datashape, which='labeledAE', activators=None, **kwargs):
     if not activators: activators = {'deep': 'selu', 'regression': 'linear', 'classification': 'softmax'}

@@ -7,12 +7,21 @@ import collections as coll
 import matplotlib.pyplot as plt
 from importlib import reload as Reimport
 
-Models = NotImplemented # deferred loading to save on keras bootup time; module-scope mostly for reloads
+Models = NotImplemented # deferred loading to save on Keras bootup time; module-scope mostly for reloads
+Keras = NotImplemented # lazy loading, see above
+
 import dparser as geo
 geo._key_cache = dict() #clean run
 import config
 import project_logging as Logger
-        
+     
+def kerasLazy():
+    """Helper for lazy-loading Keras."""
+    global Keras
+    if Keras is NotImplemented:
+        import keras as k
+        Keras = k
+    return Keras
 
 class SkinApp(object):    
     ACT_TRAIN= '(T)rain'
@@ -62,16 +71,27 @@ class SkinApp(object):
         mode = kwargs.get('mode', 'train')
         
         catprompt = 'Enter sample type regexes (comma-separated) or leave blank to use cached: '
-        cat_regexes = (kwargs.get('category_regexes') 
+        cat_regexes = (self.config.options.get('category_regexes') 
+                        or kwargs.get('category_regexes') 
                         or {rgx for rgx in (self.get_input(catprompt) or '').strip().split(',') if rgx}
-                        or tuple(geo._key_cache.values())
+                        or tuple(geo._key_cache.get('Cached-1', {}))
                        )
+        label_mapping = (self.config.options.get('label_mapping') 
+                         or kwargs.get('label_mapping')
+                        )
+        
+        
         Reimport(geo) # drops the cache...
-        datagen, catlabels = geo.build_datastreams_gen(xml=xml, txt=txt, dir=dir, 
-                                                       mode=mode, debug=False,
-                                                       drop_labels=self.config.options.get('drop_labels', False),
-                                                       category_regexes=cat_regexes, # ...but we're restoring/resetting it here (indirectly)
-                                                       )
+        catlabels, tries = [], 0
+        while len(catlabels) < len(cat_regexes):
+            tries += 1
+            datagen, catlabels = geo.build_datastreams_gen(xml=xml, txt=txt, dir=dir, 
+                                                           mode=mode, debug=False,
+                                                           drop_labels=self.config.options.get('drop_labels', False),
+                                                           category_regexes=cat_regexes, # ...but we're restoring/resetting it here (indirectly)
+                                                           category_labels=label_mapping,
+                                                           )
+            assert tries < 3
         sampled, genelabels, size = geo.sample_labels(datagen, self.config.options.get(config.LABEL_SAMPLE_SIZE))
         
         # Ugly debug hacks:
@@ -79,7 +99,7 @@ class SkinApp(object):
         global _encoding
         _encoding = catlabels # TEMPORARY, MEMOs THE LABELS
         import model_defs
-        model_type = model_defs.labeled_AE
+        model_type = model_defs.variational_deep_AE
         
         def predfunc(models):
             batch = next(sampled[0])
@@ -97,7 +117,7 @@ class SkinApp(object):
                                                   steps_per_epoch=self.config.options.get('train_steps', 60), 
                                                   initial_epoch=e-1, epochs=e,
                                                   validation_data=model_type.batchgen(source=sampled[1], catlabels=catlabels),
-                                                  validation_steps=self.config.options.get('train_steps', 60),
+                                                  validation_steps=self.config.options.get('test_steps', 30),
                                                   )
             return history
             
@@ -118,13 +138,14 @@ class SkinApp(object):
         def Compile(mdl, i=1, *args, **kwargs): 
             Logger.log_params("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl) + str(kwargs))
             if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
-                                 loss={'expression_out': kwargs.get('loss'), 'diagnosis': 'categorical_crossentropy'},
-                                 loss_weights={'expression_out': 2, 'diagnosis': 8},
+                                 loss={'diagnosis': 'categorical_crossentropy', 'expression_out': model_type.custom_loss or kwargs.get('loss'), },
+                                 loss_weights={'diagnosis': 8, 'expression_out': 2, },
                                  metrics={'diagnosis': 'categorical_accuracy'},
                                  )
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             return mdl
-        models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer='adam', loss='mse') for (i,x) in enumerate(built_models)]
+            
+        models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer='adadelta', loss='mse') for (i,x) in enumerate(built_models)]
         self.model = models
         autoencoder = models[0]
         
@@ -198,8 +219,7 @@ class SkinApp(object):
                     model_path = NotImplemented
         else:
             try:
-                import keras
-                model = keras.models.load_model(model_path)
+                model = kerasLazy().models.load_model(model_path)
                 loaded_path = model_path
             except Exception as Err:
                 if kwargs.get('verbose'): sys.excepthook(*sys.exc_info())
@@ -282,7 +302,7 @@ class SkinApp(object):
                     
             if action in self.modes[self.ACT_LOAD]:
                 _tmp, _tmp2 = None, None
-                import keras
+                keras = kerasLazy()
                 try: _tmp, _tmp2 = self.load_model(list_cwd=self.config.options.get('list_cwd', False))
                 except Exception as Err: pass
                 if _tmp: 

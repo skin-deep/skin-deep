@@ -81,7 +81,7 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
 def clean_xmls(parsed_input, *args, **kwargs):
     cleaned = (x for x in parsed_input)
     cleaned = (fr.set_index('Accession') for fr in cleaned)
-    cleaned = (get_patient_type(fr, keys=kwargs.get('category_regexes')) for fr in cleaned)
+    cleaned = (get_patient_type(fr, keys=kwargs.get('category_regexes'), labels=kwargs.get('category_labels')) for fr in cleaned)
     for clean_xml in cleaned:
         yield clean_xml
         
@@ -90,13 +90,18 @@ def get_patient_type(dframe, keys=None, **kwargs):
     """Retrieves the label of the sample type from the Title field and returns it as a (new) dataframe."""
     print('TITLE IS: {}'.format(dframe['Title']))
     print('KEYS: {}'.format(keys))
-    keys = keys or _key_cache.get('1')
-    #keys = tuple(keys.values()) if isinstance(keys, dict) else keys
-    keys = set(keys or input('Enter sample type regexes (comma-separated): ').strip().split(','))
-    labels = kwargs.get('labels') or {} #or {'Severe':'PP', 'Mild':'PN', 'Normal':'NN'}
+    #keys = (keys if isinstance(keys, dict) else {}) or _key_cache.get('Cached-1', {})
+    #keys = tuple(keys.values()) if keys and isinstance(keys, dict) else keys
+    if not isinstance(keys, dict): keys = set(keys or input('Enter sample type regexes (comma-separated): ').strip().split(','))
+    labels = (kwargs.get('labels') 
+                or {} 
+                or {'Severe':'PP', 'Mild':'PP', 'Normal':'NN', '<other>':'NN', 'Control':'NN', 'Involved':'PP', 'Uninvolved':'PN', 'Lesion':'PN', '_Lesional':'PP', '_Non-lesional':'PN', 'NL':'PN', 'LS':'PP'}
+             )
     labels = {str(k).upper(): v for k,v in labels.items()} # standardize keys
-    keys = {k: labels.get(str(k).upper(), k) for k in keys}
-    _key_cache['1'] = keys
+    print("KS1!: ", keys)
+    keys = {str(k).upper(): labels.get(str(k).upper(), str(k).upper()) for k in keys}
+    print("KS2!: ", keys)
+    _key_cache['Cached-1'] = keys
     Logger.log_params("CACHE: " + str(_key_cache))
 
     transformed = dframe.transform({'Title' : lambda x: ("/".join(keys.get(pat, 'ERROR') for pat in keys if re.search(pat, str(x), flags=re.I)) or '<other>')})
@@ -186,7 +191,7 @@ def split_data(batches, test_to_train=0.2, shuffle=True):
         batch_size = len(data)
         ratio = abs(test_to_train)
         ratio = ratio if ratio <= 1 else ratio / 100 # accept percentages as ints too
-        test_size = (batch_size * ratio) // 1
+        test_size = max(1, (batch_size * ratio) // 1)
 
         train, test = itt.chain({}), itt.chain({})
         if batch_size > 1:
@@ -220,7 +225,8 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
 
     # prepare 
     categories = dict()
-    categories.update(_key_cache)
+    print("KCG: ", _key_cache.get('Cached-1', {}), categories)
+    categories.update(_key_cache.get('Cached-1', {}))
     datastream = combo_pipeline(xml_path=xml, txt_path=txt, **kwargs)
     batches = fetch_batch(datastream)
     
@@ -251,7 +257,9 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
     
     drop_label = drop_labels
     def nodrop_retrieve(pair):
-        try: categories.update({str(pair[0]).upper(): categories.get(str(pair[0]).upper())})
+        #print("NODROP CATS: ", categories)
+        sample_lbl = str(pair[0]).upper()
+        try: categories.update({sample_lbl: categories.get(sample_lbl, (sample_lbl if sample_lbl in categories.values() else '<unknown>'))})
         except ValueError: None if str(pair[0]).upper() in categories else sys.excepthook(*sys.exc_info())
         #finally: print("PAIR 0 IS: {}".format([pair[0]]))
             
@@ -269,7 +277,7 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
         print (tuple(next(train)))
         return tuple(next(train))
 
-    tuple(next(train)) # ensures a full set was inspected; extremely hacky, find a better way
+    #tuple(next(train)) # ensures a full set was inspected; extremely hacky, find a better way
     train = (x for x in itt.chain.from_iterable(train))
     test = (x for x in itt.chain.from_iterable(test))
     if DEBUG == '5':
@@ -288,7 +296,9 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
         return (ntrain)
         
     # turn categories into indices:
+    #categories = set((categories or {}).values())
     Logger.log_params("Raw categories: {}".format(categories), to_print=True)
+    categories = ['NN', 'PP', 'PN'] #quick hack to be able to work...
     categories = dict(enumerate(sorted(categories)))
     # one-hot the categories:
     from keras.utils import to_categorical as categ_encode
@@ -316,9 +326,9 @@ def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
         safe_size = min(size, samplesize)
         nxt = nxt[0+(safe_size*offset):(safe_size*(offset+1))] if size <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
         safe_size = nxt.T.shape
-        #out_generators[i] = itt.chain((nxt,), generators[i]) # return the sampled column for processing
-        import random
-        out_generators[i] = itt.islice(generators[i], 0, None, random.choice(list(range(1,4)))) # Debug; skips steps to ensure the model generalizes outside the training sequence
+        out_generators[i] = itt.chain((nxt,), generators[i]) # return the sampled column for processing
+        #import random
+        #out_generators[i] = itt.islice(generators[i], 0, None, random.choice(list(range(1,4)))) # Debug; skips steps to ensure the model generalizes outside the training sequence
         labels = nxt.index.values
     
         if kwargs.get('verbose', True): print('LABELS PICKED: ', labels, '\n')
@@ -328,7 +338,7 @@ def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
 def parse_prediction(predarray, labels=None, *args, **kwargs):
     labels = labels or {}
     batch = kwargs.get('batch')
-    Logger.log_params("RAW: \n{}".format(predarray))
+    #Logger.log_params("RAW: \n{}".format(predarray))
     #if batch is not None: print("BATCH: \n", batch)
     if batch is not None: print("SAMPLE: ", batch.columns.values[-1])
     diagarray, topprob, diagnosis = np.array([predarray[1][-1]]), -1., None

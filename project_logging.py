@@ -2,7 +2,7 @@ import sys, os, shutil
 import pickle
 import datetime
 
-def log_params(logstr, dest='', to_print=True, *args, **kwargs):
+def log_params(logstr, dest='LOGS', to_print=True, *args, **kwargs):
     logstr = str(logstr)
     dest = os.path.abspath(dest or os.getcwd())
     if not os.path.isdir(dest):
@@ -21,5 +21,6 @@ def main(*args, **kwargs):
     pass
     
 if __name__ == '__main__':
-    print(' ')
+    print('This module is not meant to be executed directly.')
+    input('Press Enter to quit...')
     sys.exit(main(**args))
