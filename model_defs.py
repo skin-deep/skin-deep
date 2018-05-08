@@ -283,20 +283,6 @@ class variational_deep_AE(deep_AE):
             
         Encoder = cls.DLmodel(inbound, enc_out_layer, name='Encoder')
         
-        # Diagnostician: compressed vals -> class
-        # 'interface' layer for inspecting latent spaces as a predictive ensemble
-        ensemble_inputs = {enc_out_layer}
-        interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', 650), activation='linear', activity_regularizer=cls.DLbackend.regularizers.l1(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
-        for assay_latent_space in ensemble_inputs:
-            # corrupt each input separately
-            diagger_inp = cls.DLbackend.layers.AlphaDropout(0.25)(assay_latent_space)
-            # connect the interface layer to each input
-            diagger = interface_node(diagger_inp)
-            
-        diagnosis = cls.DLbackend.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
-                                                kernel_initializer='lecun_normal', kernel_regularizer=cls.DLbackend.regularizers.l1(0.1),
-                                                name='diagnosis')(diagger)
-        
         # Decoder: compressed vals -> regression vals
         dec_start = None
         for (i, siz) in enumerate(reversed(lay_sizes[:-1])):
@@ -309,6 +295,20 @@ class variational_deep_AE(deep_AE):
         decoder_node = cls.DLbackend.layers.Dense(Encoder.layers[0].input_shape[-1], activation=activators.get('regression', 'linear'), kernel_initializer='lecun_normal', name='expression_out')
         decoded = decoder_node(last_lay)
         dec_start = dec_start or decoder_node
+        
+        # Diagnostician: vals -> class
+        # 'interface' layer for inspecting latent spaces as a predictive ensemble
+        #ensemble_inputs = {enc_out_layer}
+        #interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', 650), activation='linear', activity_regularizer=cls.DLbackend.regularizers.l1(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
+        #for assay_latent_space in ensemble_inputs:
+        #    # corrupt each input separately
+        #    diagger_inp = cls.DLbackend.layers.AlphaDropout(0.05)(assay_latent_space)
+        #    # connect the interface layer to each input
+        #    diagger = interface_node(diagger_inp)
+            
+        diagnosis = cls.DLbackend.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
+                                                kernel_initializer='lecun_normal', kernel_regularizer=cls.DLbackend.regularizers.l1(0.1),
+                                                name='diagnosis')(decoded)
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Predictor')
