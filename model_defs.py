@@ -263,7 +263,10 @@ class variational_deep_AE(labeled_AE):
         
         for (i, siz) in enumerate(lay_sizes[:-1]):
             print(str(i)+':', siz or "NONE!")
-            encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i))
+            encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', 
+                                                      activity_regularizer = cls.DLbackend.regularizers.l2(0.01),
+                                                      name='encoder_{}'.format(i)
+                                                     )
             last_lay = encoder_node(last_lay)
         else:
             # VAE stuff:
@@ -306,8 +309,8 @@ class variational_deep_AE(labeled_AE):
         #    # connect the interface layer to each input
         #    diagger = interface_node(diagger_inp)
             
-        diagnosis = cls.DLbackend.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
-                                                kernel_initializer='lecun_normal', activity_regularizer=cls.DLbackend.regularizers.l1(0.01),
+        diagnosis = cls.DLbackend.layers.Dense(3, activation='softmax', 
+                                                kernel_initializer='lecun_normal',
                                                 name='diagnosis')(enc_out_layer)
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
@@ -334,11 +337,11 @@ class variational_deep_AE(labeled_AE):
         from keras.utils import normalize as K_norm
         batch = (
                 ({
-                 'expression_in': K_norm(np.array(x.T.values), order=1),
+                 'expression_in': K_norm(np.array(x.T.values), order=2),
                  'diagnosis_in': np.array(catlabels.get(str(x.index.name).upper())),
                 },
                 {
-                 'expression_out': K_norm(np.array(x.T.values), order=1),
+                 'expression_out': K_norm(np.array(x.T.values), order=2),
                  'diagnosis': np.array(catlabels.get(str(x.index.name).upper())),
                 })
                 for x in source)
