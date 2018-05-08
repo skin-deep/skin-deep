@@ -145,7 +145,7 @@ class SkinApp(object):
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             return mdl
             
-        models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer='adadelta', loss='mse') for (i,x) in enumerate(built_models)]
+        models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer='nadam', loss='mse') for (i,x) in enumerate(built_models)]
         self.model = models
         autoencoder = models[0]
         

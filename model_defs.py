@@ -238,7 +238,7 @@ class labeled_AE(deep_AE):
         return (Autoencoder, Encoder, Diagnostician)
         
         
-class variational_deep_AE(deep_AE):
+class variational_deep_AE(labeled_AE):
 
     def build(cls, datashape, activators=None, compression_fac=None, **kwargs):
         activators = activators or {'deep': 'selu', 'regression': 'linear'}
@@ -307,8 +307,8 @@ class variational_deep_AE(deep_AE):
         #    diagger = interface_node(diagger_inp)
             
         diagnosis = cls.DLbackend.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
-                                                kernel_initializer='lecun_normal', kernel_regularizer=cls.DLbackend.regularizers.l1(0.1),
-                                                name='diagnosis')(decoded)
+                                                kernel_initializer='lecun_normal', activity_regularizer=cls.DLbackend.regularizers.l1(0.01),
+                                                name='diagnosis')(enc_out_layer)
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Predictor')
