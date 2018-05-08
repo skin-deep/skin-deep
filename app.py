@@ -116,8 +116,8 @@ class SkinApp(object):
                                                   model_type.batchgen(source=sampled[0], catlabels=catlabels),
                                                   steps_per_epoch=self.config.options.get('train_steps', 60), 
                                                   initial_epoch=e-1, epochs=e,
-                                                  #validation_data=model_type.batchgen(source=sampled[1], catlabels=catlabels),
-                                                  #validation_steps=self.config.options.get('test_steps', 30),
+                                                  validation_data=model_type.batchgen(source=sampled[1], catlabels=catlabels),
+                                                  validation_steps=self.config.options.get('test_steps', 30),
                                                   )
             return history
             
@@ -182,7 +182,8 @@ class SkinApp(object):
                     try: os.replace(savepath, savepath+'.backup')
                     except Exception: pass
                     
-                    if mode == 'train': autoencoder.save(savepath)
+                    if mode == 'train': 
+                        for i,m in enumerate(models): m.save('{}.{}'.format(savepath, i))
                     if mode == 'test': result.to_csv(savepath)
                     
             else: savepath = None if savepath is NotImplemented else savepath

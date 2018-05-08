@@ -131,6 +131,7 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
     xmls = xml_pipeline(path=xml_path, *args, **kwargs)
     #txts = txt_pipeline(path=txt_path, *args, **kwargs)
     count = 0
+    import random
 
     for xml in xmls:
         sample_groups = xml.groupby('Title').groups
@@ -142,7 +143,7 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
             for t in types:
                 if t in ignored: continue
                 try: 
-                    batch.update({t : sample_groups[t][pos]}) #in dict
+                    if random.random() < 0.5: batch.update({t : sample_groups[t][pos]}) #in dict
                     count += 1
                 except IndexError as IE:
                     ignored.update(t)
