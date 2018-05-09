@@ -167,7 +167,7 @@ class labeled_AE(deep_AE):
     @classmethod
     def input_preprocessing(cls, input_lay, *args, **kwargs):
         transformed = input_lay
-        transformed = cls.DLbackend.layers.AlphaDropout(0.5)(transformed)
+        transformed = cls.DLbackend.layers.AlphaDropout(0.55)(transformed)
         return transformed
         
     @classmethod
@@ -311,7 +311,7 @@ class variational_deep_AE(labeled_AE):
             
         diagnosis = cls.DLbackend.layers.Dense(3, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
-                                                name='diagnosis')(enc_out_layer)
+                                                name='diagnosis')(decoded)
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Predictor')
@@ -335,17 +335,35 @@ class variational_deep_AE(labeled_AE):
         """
         import numpy as np
         from keras.utils import normalize as K_norm
-        batch = (
-                ({
-                 'expression_in': K_norm(K_norm(np.array(x.T.values), order=-1), order=1),
-                 'diagnosis_in': np.array(catlabels.get(str(x.index.name).upper())),
-                },
-                {
-                 'expression_out': K_norm(K_norm(np.array(x.T.values), order=-1), order=1),
-                 'diagnosis': np.array(catlabels.get(str(x.index.name).upper())),
-                })
-                for x in source)
-        return batch
+        
+        
+        def batcher():
+            for x in source:
+                # norm_x = x.applymap(normalization)
+                # print (x, norm_x)
+                expression = np.array(x.T.values)
+                xmax, xmin = expression.max(), expression.min() # caching
+                normalization = lambda pt: 2*((pt-xmin)/(xmax-xmin) - 0.5) #{-1;1} rescaling
+                
+                expression = np.apply_along_axis(normalization, 0, expression)
+                # expression = K_norm(K_norm(np.array(x.T.values), order=1), order=1)
+                
+                diagnosis = np.array(catlabels.get(str(x.index.name).upper()))
+                #print("\n", "EXPR: ", "\n", xmin, expression.min(), "\n", xmax, expression.max(), "\n", expression[:8], "\n")
+                #if input('Cont.?'): break
+                #print("\n", "DIAG: ", "\n", diagnosis, "\n", x.index.name, "\n", catlabels, "\n")
+                batch = ((
+                            {
+                             'expression_in': expression,
+                             'diagnosis_in': diagnosis,
+                            },
+                            {
+                             'expression_out': expression,
+                             'diagnosis': diagnosis,
+                            }
+                        ))
+                yield batch
+        return batcher()
     
 def build_models(datashape, which='labeledAE', activators=None, **kwargs):
     if not activators: activators = {'deep': 'selu', 'regression': 'linear', 'classification': 'softmax'}

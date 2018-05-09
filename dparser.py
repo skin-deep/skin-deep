@@ -30,13 +30,9 @@ def parse_datasets(files=None, verbose=False, *args, **kwargs):
         accession = re.match('([A-Z]{3}\d+?)-.*', filename)
         accession = accession.group(1) if accession else filename
         with open(filepath) as file:
-            try:
-                table = pd.read_table(file,
-                                     names = (DATA_COLNAME, accession))
-            except Exception as E:
-                sys.excepthook(type(E), E.message, sys.exc_traceback)
-        if verbose: 
-            print ('Could not parse {}!'.format(filename) if not any(table) else '{} parsed successfully.'.format(filename))
+            try: table = pd.read_table(file, names = (DATA_COLNAME, accession))
+            except Exception as E: sys.excepthook(*sys.exc_info())
+        if verbose: print ('Could not parse {}!'.format(filename) if not any(table) else '{} parsed successfully.'.format(filename))
         yield table
 
 
@@ -50,8 +46,7 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
     data = []
     for filename in files:
         xml_data = None
-        with open(filename) as xml_file:
-            xml_data = xml_file.read()
+        with open(filename) as xml_file: xml_data = xml_file.read()
         if xml_data:
             root = ET.XML(xml_data)
             all_records = []
@@ -143,12 +138,12 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
             for t in types:
                 if t in ignored: continue
                 try: 
-                    if random.random() < 0.5: batch.update({t : sample_groups[t][pos]}) #in dict
+                    batch.update({t : sample_groups[t][pos]}) #in dict
                     count += 1
                 except IndexError as IE:
                     ignored.update(t)
             if not len(batch): break
-            #print(batch)
+            if random.random() < 0.25: batch.popitem()
             yield batch
             pos += 1
 
