@@ -337,11 +337,11 @@ class variational_deep_AE(labeled_AE):
         from keras.utils import normalize as K_norm
         batch = (
                 ({
-                 'expression_in': K_norm(np.array(x.T.values), order=2),
+                 'expression_in': K_norm(K_norm(np.array(x.T.values), order=-1), order=1),
                  'diagnosis_in': np.array(catlabels.get(str(x.index.name).upper())),
                 },
                 {
-                 'expression_out': K_norm(np.array(x.T.values), order=2),
+                 'expression_out': K_norm(K_norm(np.array(x.T.values), order=-1), order=1),
                  'diagnosis': np.array(catlabels.get(str(x.index.name).upper())),
                 })
                 for x in source)
