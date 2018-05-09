@@ -311,7 +311,7 @@ class variational_deep_AE(labeled_AE):
             
         diagnosis = cls.DLbackend.layers.Dense(3, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
-                                                name='diagnosis')(decoded)
+                                                name='diagnosis')(enc_out_layer)
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Predictor')
@@ -343,7 +343,8 @@ class variational_deep_AE(labeled_AE):
                 # print (x, norm_x)
                 expression = np.array(x.T.values)
                 xmax, xmin = expression.max(), expression.min() # caching
-                normalization = lambda pt: 2*((pt-xmin)/(xmax-xmin) - 0.5) #{-1;1} rescaling
+                #normalization = lambda pt: 2*((pt-xmin)/(xmax-xmin) - 0.5) #{-1;1} rescaling
+                normalization = lambda pt: pt * (10 ** ((np.log10(abs(xmin))) - (np.log10(abs(xmax))))) # standardizes relative magnitudes
                 
                 expression = np.apply_along_axis(normalization, 0, expression)
                 # expression = K_norm(K_norm(np.array(x.T.values), order=1), order=1)

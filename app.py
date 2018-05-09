@@ -105,7 +105,15 @@ class SkinApp(object):
             batch = next(sampled[0])
             #Logger.log_params(batch)
             orig_vals = np.array(batch.T.values, dtype='float32')
-            prediction = models[config.which_model].predict_on_batch([batch.T])
+            
+            #NORM
+            expression = orig_vals
+            xmax, xmin = expression.max(), expression.min() # caching
+            normalization = lambda pt: pt * (10 ** ((np.log10(abs(xmin))) - (np.log10(abs(xmax))))) # standardizes relative magnitudes
+            expression = np.apply_along_axis(normalization, 0, expression)
+            #ENDNORM
+            
+            prediction = models[config.which_model].predict_on_batch([expression])
             Logger.log_params("Actual type: {}".format(str(batch.index.name)))
             prediction = geo.parse_prediction(prediction, catlabels, batch=batch, genes=genelabels)
             return prediction
@@ -145,7 +153,7 @@ class SkinApp(object):
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             return mdl
             
-        models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer='nadam', loss='mse') for (i,x) in enumerate(built_models)]
+        models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer='adadelta', loss='mse') for (i,x) in enumerate(built_models)]
         self.model = models
         autoencoder = models[0]
         

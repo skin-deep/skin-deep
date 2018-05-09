@@ -90,7 +90,7 @@ def get_patient_type(dframe, keys=None, **kwargs):
     if not isinstance(keys, dict): keys = set(keys or input('Enter sample type regexes (comma-separated): ').strip().split(','))
     labels = (kwargs.get('labels') 
                 or {} 
-                or {'Severe':'PP', 'Mild':'PP', 'Normal':'NN', '<other>':'NN', 'Control':'NN', 'Involved':'PP', 'Uninvolved':'PN', 'Lesion':'PN', '_Lesional':'PP', '_Non-lesional':'PN', 'NL':'PN', 'LS':'PP'}
+                or {'Severe':'PP', 'Mild':'PP', 'Normal':'NN', '<other>':'NN', 'Control':'NN', 'Involved':'PP', 'Uninvolved':'PN', 'Lesion':'PN', '_Lesional':'PP', '_Non-lesional':'PN', 'NL':'PN', 'LS':'PP', 'acne':'NN'}
              )
     labels = {str(k).upper(): v for k,v in labels.items()} # standardize keys
     print("KS1!: ", keys)
