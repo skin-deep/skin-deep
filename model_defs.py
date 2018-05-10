@@ -339,12 +339,11 @@ class variational_deep_AE(labeled_AE):
         
         def batcher():
             for x in source:
-                # norm_x = x.applymap(normalization)
-                # print (x, norm_x)
-                expression = np.array(x.T.values)
-                xmax, xmin = expression.max(), expression.min() # caching
-                #normalization = lambda pt: 2*((pt-xmin)/(xmax-xmin) - 0.5) #{-1;1} rescaling
-                normalization = lambda pt: pt * (10 ** ((np.log10(abs(xmin))) - (np.log10(abs(xmax))))) # standardizes relative magnitudes
+                expression = np.array(x.sort_index().T.values)
+                abs_exp = np.absolute(expression)
+                xmax, xmin = abs_exp.max(), abs_exp.min() # caching
+                magn_xmax, magn_xmin = np.log10(xmax), np.log10(xmin)
+                normalization = lambda pt: pt * (10 ** (magn_xmax - magn_xmin)) # standardizes relative magnitudes
                 
                 expression = np.apply_along_axis(normalization, 0, expression)
                 # expression = K_norm(K_norm(np.array(x.T.values), order=1), order=1)

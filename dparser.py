@@ -88,14 +88,15 @@ def get_patient_type(dframe, keys=None, **kwargs):
     #keys = (keys if isinstance(keys, dict) else {}) or _key_cache.get('Cached-1', {})
     #keys = tuple(keys.values()) if keys and isinstance(keys, dict) else keys
     if not isinstance(keys, dict): keys = set(keys or input('Enter sample type regexes (comma-separated): ').strip().split(','))
-    labels = (kwargs.get('labels') 
-                or {} 
-                or {'Severe':'PP', 'Mild':'PP', 'Normal':'NN', '<other>':'NN', 'Control':'NN', 'Involved':'PP', 'Uninvolved':'PN', 'Lesion':'PN', '_Lesional':'PP', '_Non-lesional':'PN', 'NL':'PN', 'LS':'PP', 'acne':'NN'}
-             )
+    labels = (
+            kwargs.get('labels') 
+            or {} 
+            or {'Severe':'PP', 'Mild':'PP', 'Normal':'NN', '<other>':'NN', 'Control':'NN', 'Involved':'PP', 'Uninvolved':'PN', 'Lesion':'PN', '_Lesional':'PP', '_Non-lesional':'PN', 'NL':'PN', 'LS':'PP', 'acne':'NN'}
+            )
     labels = {str(k).upper(): v for k,v in labels.items()} # standardize keys
-    print("KS1!: ", keys)
+    #print("KS1!: ", keys)
     keys = {str(k).upper(): labels.get(str(k).upper(), str(k).upper()) for k in keys}
-    print("KS2!: ", keys)
+    #print("KS2!: ", keys)
     _key_cache['Cached-1'] = keys
     Logger.log_params("CACHE: " + str(_key_cache))
 
