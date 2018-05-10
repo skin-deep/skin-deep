@@ -341,9 +341,10 @@ class variational_deep_AE(labeled_AE):
             for x in source:
                 expression = np.array(x.sort_index().T.values)
                 abs_exp = np.absolute(expression)
-                xmax, xmin = abs_exp.max(), abs_exp.min() # caching
-                magn_xmax, magn_xmin = np.log10(xmax), np.log10(xmin)
-                normalization = lambda pt: pt * (10 ** (magn_xmax - magn_xmin)) # standardizes relative magnitudes
+                xmax, xmin = abs_exp.max(), abs_exp.min()
+                log_precision = 1 # fuzz factor
+                magn_scale = np.log10(max(abs(xmax), log_precision)) - np.log10(max(abs(xmin), log_precision))
+                normalization = lambda pt: pt * (10 ** (magn_scale)) # standardizes relative magnitudes
                 
                 expression = np.apply_along_axis(normalization, 0, expression)
                 # expression = K_norm(K_norm(np.array(x.T.values), order=1), order=1)
