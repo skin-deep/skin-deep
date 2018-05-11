@@ -108,12 +108,12 @@ class SkinApp(object):
             
             #NORM
             expression = np.array(batch.sort_index().T.values)
-            abs_exp = np.absolute(expression)
-            xmax, xmin = abs_exp.max(), abs_exp.min()
+            #abs_exp = np.absolute(expression)
+            #xmax, xmin = abs_exp.max(), abs_exp.min()
             #log_precision = 1 # fuzz factor
-            magn_scale = np.log10(abs(xmax))#, log_precision))
-            magn_scale = np.ceil(magn_scale)
-            #magn_scale = magn_scale + 1 # upscale a bit for better performance
+            #magn_scale = np.log10(abs(xmax))#, log_precision))
+            #magn_scale = np.trunc(magn_scale)
+            magn_scale = -2 # temporary
             normalization = lambda pt: pt * (10 ** (-magn_scale)) # standardizes relative magnitudes
             
             expression = np.apply_along_axis(normalization, 0, expression)

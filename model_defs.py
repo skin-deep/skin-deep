@@ -167,7 +167,7 @@ class labeled_AE(deep_AE):
     @classmethod
     def input_preprocessing(cls, input_lay, *args, **kwargs):
         transformed = input_lay
-        transformed = cls.DLbackend.layers.AlphaDropout(0.55)(transformed)
+        transformed = cls.DLbackend.layers.AlphaDropout(0.35)(transformed)
         return transformed
         
     @classmethod
@@ -299,7 +299,8 @@ class variational_deep_AE(labeled_AE):
         decoded = decoder_node(last_lay)
         dec_start = dec_start or decoder_node
         
-        # Diagnostician: vals -> class
+        # Diagnostician: vals -> class; functions as the adversarial component of the model
+        
         # 'interface' layer for inspecting latent spaces as a predictive ensemble
         #ensemble_inputs = {enc_out_layer}
         #interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', 650), activation='linear', activity_regularizer=cls.DLbackend.regularizers.l1(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
@@ -309,12 +310,16 @@ class variational_deep_AE(labeled_AE):
         #    # connect the interface layer to each input
         #    diagger = interface_node(diagger_inp)
             
-        diagnosis = cls.DLbackend.layers.Dense(3, activation='softmax', 
+        
+        diagger = cls.DLbackend.layers.Dense(3, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
-                                                name='diagnosis')(enc_out_layer)
+                                                name='diagnosis')
+        #base_diagnosis = diagger(inbound)
+        diagnosis = diagger(decoded)
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
-        Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Predictor')
+        Decoder = cls.DLmodel(inputs=[inbound], outputs=[decoded], name='Decoder')
+        Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Diagnostician')
         
         def VAE_loss(inp, outp):
             """Axis-wise KL-Div + MSE"""
@@ -340,11 +345,11 @@ class variational_deep_AE(labeled_AE):
         def batcher():
             for x in source:
                 expression = np.array(x.sort_index().T.values)
-                abs_exp = np.absolute(expression)
-                xmax, xmin = abs_exp.max(), abs_exp.min()
+                #abs_exp = np.absolute(expression)
+                #xmax, xmin = abs_exp.max(), abs_exp.min()
                 #log_precision = 1 # fuzz factor
-                magn_scale = np.log10(abs(xmax))#, log_precision))
-                magn_scale = np.rint(magn_scale)
+                #magn_scale = np.log10(abs(xmax))#, log_precision))
+                magn_scale = -2 # TEMPORARY! np.trunc(magn_scale)
                 normalization = lambda pt: pt * (10 ** (-magn_scale)) # standardizes relative magnitudes
                 
                 expression = np.apply_along_axis(normalization, 0, expression)
