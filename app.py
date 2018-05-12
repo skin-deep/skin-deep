@@ -108,7 +108,7 @@ class SkinApp(object):
             #NORM
             K = kerasLazy().backend
             expression = K.variable(batch.sort_index().T.values)
-            expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([1]), beta=K.variable([0]), reduction_axes=[1])
+            expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([10]), beta=K.variable([0]), reduction_axes=[1])
             expression = K.eval(expression)
             #ENDNORM
             

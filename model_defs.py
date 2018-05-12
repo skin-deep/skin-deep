@@ -322,9 +322,9 @@ class variational_deep_AE(labeled_AE):
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Diagnostician')
         
         def VAE_loss(inp, outp):
-            """Axis-wise KL-Div + MAPE"""
+            """Axis-wise KL-Div + MSE"""
             import keras.backend as K
-            reconstruction_loss = K.sum(K.abs((outp-inp)/inp))
+            reconstruction_loss = K.sum(K.square(outp-inp))
             kl_loss = - 0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
             total_loss = K.mean(reconstruction_loss + kl_loss)    
             return total_loss
@@ -347,7 +347,7 @@ class variational_deep_AE(labeled_AE):
                 #abs_exp = K.get_value(expression)#np.absolute(expression)
                 #xmax, xmin = abs_exp.max(), abs_exp.min()
 
-                expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([1]), beta=K.variable([0]), reduction_axes=[1])
+                expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([10]), beta=K.variable([0]), reduction_axes=[1])
                 expression = K.eval(expression)
                 
                 diagnosis = np.array(catlabels.get(str(x.index.name).upper()))
