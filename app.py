@@ -107,16 +107,10 @@ class SkinApp(object):
             #orig_vals = np.array(batch.T.values, dtype='float32')
             
             #NORM
-            expression = np.array(batch.sort_index().T.values)
-            #abs_exp = np.absolute(expression)
-            #xmax, xmin = abs_exp.max(), abs_exp.min()
-            #log_precision = 1 # fuzz factor
-            #magn_scale = np.log10(abs(xmax))#, log_precision))
-            #magn_scale = np.trunc(magn_scale)
-            magn_scale = -2 # temporary
-            normalization = lambda pt: pt * (10 ** (-magn_scale)) # standardizes relative magnitudes
-            
-            expression = np.apply_along_axis(normalization, 0, expression)
+            K = kerasLazy().backend
+            expression = K.variable(batch.sort_index().T.values)
+            expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([1]), beta=K.variable([0]), reduction_axes=[1])
+            expression = K.eval(expression)
             #ENDNORM
             
             prediction = models[config.which_model].predict_on_batch([expression])
@@ -151,6 +145,7 @@ class SkinApp(object):
         
         def Compile(mdl, i=1, *args, **kwargs): 
             Logger.log_params("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl) + str(kwargs))
+            def merge_losses(*losses): return kerasLazy().backend.mean(kerasLazy().backend.sum(*[l() for l in losses]))
             if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
                                  loss_weights={'diagnosis': 18, 'expression_out': 2, },

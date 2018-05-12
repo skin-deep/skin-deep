@@ -339,24 +339,20 @@ class variational_deep_AE(labeled_AE):
         :param catlabels: category labels
         """
         import numpy as np
-        from keras.utils import normalize as K_norm
-        
+        #from keras.utils import normalize as K_norm
+        import keras.backend as K
         
         def batcher():
             for x in source:
-                expression = np.array(x.sort_index().T.values)
-                #abs_exp = np.absolute(expression)
+                expression = K.variable(x.sort_index().T.values)
+                #abs_exp = K.get_value(expression)#np.absolute(expression)
                 #xmax, xmin = abs_exp.max(), abs_exp.min()
-                #log_precision = 1 # fuzz factor
-                #magn_scale = np.log10(abs(xmax))#, log_precision))
-                magn_scale = -2 # TEMPORARY! np.trunc(magn_scale)
-                normalization = lambda pt: pt * (10 ** (-magn_scale)) # standardizes relative magnitudes
-                
-                expression = np.apply_along_axis(normalization, 0, expression)
-                # expression = K_norm(K_norm(np.array(x.T.values), order=1), order=1)
+
+                expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([1]), beta=K.variable([0]), reduction_axes=[1])
+                expression = K.eval(expression)
                 
                 diagnosis = np.array(catlabels.get(str(x.index.name).upper()))
-                #print("\n", "EXPR: ", "\n", xmin, expression.min(), "\n", xmax, expression.max(), "\n", expression[:8], "\n")
+                #print("\n", "EXPR: ", "\n", xmin, expression.min(), "\n", xmax, expression.max(), "\n", abs_exp, "\n", expression)
                 #if input('Cont.?'): break
                 #print("\n", "DIAG: ", "\n", diagnosis, "\n", x.index.name, "\n", catlabels, "\n")
                 batch = ((
