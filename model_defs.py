@@ -349,7 +349,7 @@ class variational_deep_AE(labeled_AE):
                 #abs_exp = K.get_value(expression)#np.absolute(expression)
                 #xmax, xmin = abs_exp.max(), abs_exp.min()
 
-                expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([1]), beta=K.variable([0]), reduction_axes=[1])
+                expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([0.8]), beta=K.variable([0]), reduction_axes=[1])
                 expression = K.eval(expression)
                 
                 diagnosis = np.array(catlabels.get(str(x.index.name).upper()))

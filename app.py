@@ -1,5 +1,6 @@
 import sys, os, shutil
 import pickle
+import datetime
 import pandas as pd
 import numpy as np
 import itertools as itt
@@ -118,6 +119,7 @@ class SkinApp(object):
             return prediction
             
         def trainfunc(models, e=1):
+            Callbacks = kerasLazy().callbacks
             trained_model = models[0]
             history = trained_model.fit_generator(
                                                   model_type.batchgen(source=sampled[0], catlabels=catlabels),
@@ -125,6 +127,10 @@ class SkinApp(object):
                                                   initial_epoch=e-1, epochs=e,
                                                   validation_data=model_type.batchgen(source=sampled[1], catlabels=catlabels),
                                                   validation_steps=self.config.options.get('test_steps', 30),
+                                                  
+                                                  callbacks=[Callbacks.ReduceLROnPlateau(monitor='diagnosis_loss', factor=0.75, verbose=1),
+                                                             Callbacks.CSVLogger(filename='trainlog.csv', append=True),
+                                                            ]
                                                   )
             return history
             
@@ -143,17 +149,22 @@ class SkinApp(object):
                                             )
         
         def Compile(mdl, i=1, *args, **kwargs): 
-            Logger.log_params("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl) + str(kwargs))
             def merge_losses(*losses): return kerasLazy().backend.mean(kerasLazy().backend.sum(*[l() for l in losses]))
+            Logger.log_params("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl) + str(kwargs))
             if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
-                                 loss_weights={'diagnosis': 2, 'expression_out': 2, },
+                                 loss_weights={'diagnosis': 6, 'expression_out': 2,},
                                  metrics={'diagnosis': 'categorical_accuracy'},
                                  )
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             return mdl
             
-        models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer='adadelta', loss='mse') for (i,x) in enumerate(built_models)]
+        mdl_optimizer = kerasLazy().optimizers.Nadam()
+        mdl_losses = {'default': 'mse'}
+        
+        models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) for (i,x) in enumerate(built_models)]
+        if kwargs.get('recompile', False): models = [Compile(mdl=models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) for (i,x) in enumerate(models)]
+        
         self.model = models
         autoencoder = models[0]
         
@@ -424,5 +435,6 @@ if __name__ == '__main__':
     argparser.add_argument('--dir')
     argparser.add_argument('--cmd', nargs='*')
     argparser.add_argument('-v', '--verbose', action='store_true')
+    argparser.add_argument('-R', '--recompile', action='store_true')
     args = vars(argparser.parse_args())
     sys.exit(main(**args))
