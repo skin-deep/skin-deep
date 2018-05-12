@@ -108,7 +108,7 @@ class SkinApp(object):
             #NORM
             K = kerasLazy().backend
             expression = K.variable(batch.sort_index().T.values)
-            expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([10]), beta=K.variable([0]), reduction_axes=[1])
+            expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([1]), beta=K.variable([0]), reduction_axes=[1])
             expression = K.eval(expression)
             #ENDNORM
             
@@ -147,7 +147,7 @@ class SkinApp(object):
             def merge_losses(*losses): return kerasLazy().backend.mean(kerasLazy().backend.sum(*[l() for l in losses]))
             if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
-                                 loss_weights={'diagnosis': 18, 'expression_out': 2, },
+                                 loss_weights={'diagnosis': 2, 'expression_out': 2, },
                                  metrics={'diagnosis': 'categorical_accuracy'},
                                  )
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))

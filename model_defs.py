@@ -314,7 +314,7 @@ class variational_deep_AE(labeled_AE):
         diagger = cls.DLbackend.layers.Dense(3, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
                                                 name='diagnosis')
-        #base_diagnosis = diagger(inbound)
+        base_diagnosis = diagger(inbound)
         diagnosis = diagger(decoded)
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
@@ -322,10 +322,12 @@ class variational_deep_AE(labeled_AE):
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Diagnostician')
         
         def VAE_loss(inp, outp):
-            """Axis-wise KL-Div + MSE"""
+            """Axis-wise KL-Div + loss-of-predictor KL-Div"""
             import keras.backend as K
-            reconstruction_loss = K.sum(K.square(outp-inp))
-            kl_loss = - 0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
+            # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
+            reconstruction_loss = K.kullback_leibler_divergence(base_diagnosis, diagnosis)
+            
+            kl_loss = -0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
             total_loss = K.mean(reconstruction_loss + kl_loss)    
             return total_loss
         Autoencoder.custom_loss = VAE_loss
@@ -347,7 +349,7 @@ class variational_deep_AE(labeled_AE):
                 #abs_exp = K.get_value(expression)#np.absolute(expression)
                 #xmax, xmin = abs_exp.max(), abs_exp.min()
 
-                expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([10]), beta=K.variable([0]), reduction_axes=[1])
+                expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([1]), beta=K.variable([0]), reduction_axes=[1])
                 expression = K.eval(expression)
                 
                 diagnosis = np.array(catlabels.get(str(x.index.name).upper()))
