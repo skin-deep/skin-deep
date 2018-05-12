@@ -104,7 +104,6 @@ class SkinApp(object):
         def predfunc(models):
             batch = next(sampled[0])
             #Logger.log_params(batch)
-            #orig_vals = np.array(batch.T.values, dtype='float32')
             
             #NORM
             K = kerasLazy().backend
