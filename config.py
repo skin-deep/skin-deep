@@ -12,12 +12,12 @@ class MenuConfiguration(object):
     defaults =  (
                     ('train_steps', 50), 
                     ('test_steps', 10), 
-                    ('batch_size', 15),
+                    ('batch_size', 5),
                     (LABEL_SAMPLE_SIZE, None), 
                     
                     ('model_depth', 3), 
-                    ('compression_fac', 400), #300/60ep@60st is decent enough
-                    ('depth_scaling', 2),
+                    ('compression_fac', 350),
+                    ('depth_scaling', 3),
                     
                     (SAVE_EVERY, 10),
                     (SAVE_TAILS, False),

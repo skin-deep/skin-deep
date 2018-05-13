@@ -261,7 +261,7 @@ class variational_deep_AE(labeled_AE):
         inbound = cls.DLbackend.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
         last_lay = inbound
         
-        preprocessed_inp = cls.input_preprocessing(last_lay, **kwargs)
+        preprocessed_inp = inbound #cls.input_preprocessing(last_lay, **kwargs)
         last_lay = preprocessed_inp
         
         
@@ -307,6 +307,7 @@ class variational_deep_AE(labeled_AE):
         
         diagger = cls.DLbackend.layers.Dense(3, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
+                                                kernel_regularizer=cls.DLbackend.regularizers.l1(0.01),
                                                 name='diagnosis')
         base_diagnosis = diagger(inbound)
         diagnosis = diagger(decoded)
@@ -319,7 +320,7 @@ class variational_deep_AE(labeled_AE):
             """Axis-wise KL-Div + loss-of-predictor KL-Div"""
             import keras.backend as K
             # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
-            reconstruction_loss = K.kullback_leibler_divergence(base_diagnosis, diagnosis)
+            reconstruction_loss = K.categorical_crossentropy(base_diagnosis, diagnosis)
             
             kl_loss = -0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
             total_loss = K.mean(reconstruction_loss + kl_loss)    
