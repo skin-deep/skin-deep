@@ -251,9 +251,10 @@ class variational_deep_AE(labeled_AE):
         except Exception: deep_lvls = 1
         
         depth_scaling = kwargs.get('depth_scaling') or 2 # layer size increase rate for each deep level between representation and endpoints
+        print("Depth Scaling: {}\n".format(depth_scaling))
         
         clamp_size = lambda S: max(1, min(S, uncompr_size-1))
-        lay_sizes = [clamp_size(compr_size * (depth_scaling**lvl)) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
+        lay_sizes = [clamp_size(round(compr_size * (depth_scaling**lvl))) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
         print(lay_sizes)
 
         # layers
@@ -312,7 +313,7 @@ class variational_deep_AE(labeled_AE):
         base_diagnosis = diagger(inbound)
         diagnosis = diagger(decoded)
             
-        Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
+        Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, base_diagnosis], name='Autoencoder')
         Decoder = cls.DLmodel(inputs=[inbound], outputs=[decoded], name='Decoder')
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Diagnostician')
         
