@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 import itertools as itt
 import re
 
-import project_logging as Logger
+import SDutils as Logger
 
 DATA_COLNAME = 'Target'
 
@@ -143,8 +143,9 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
                     count += 1
                 except IndexError as IE:
                     ignored.update(t)
-            if not len(batch): break
-            if random.random() < 0.25: batch.popitem()
+            batchlen = len(batch)
+            if not batchlen: break
+            if batchlen > 1 and random.random() < 0.40: batch.popitem()
             yield batch
             pos += 1
 
@@ -351,7 +352,7 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
     print(diff)
     if genelabels is not None: predarray = predarray.set_index(genelabels)
     #print("PROCESSED: \n\n", predarray)
-    predarray = pd.concat({'original':batch, 'predicted':predarray, 'diff':diff}, axis=1)
+    predarray = pd.concat({'original':batch, 'predicted':predarray}, axis=1)
     Logger.log_params('---'*30)
     return predarray
     

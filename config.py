@@ -8,16 +8,22 @@ SAVE_TAILS = 'save_low_epochs'
 which_model = 0 # TEMPORARY VAR, REMOVE ME!
 
 class MenuConfiguration(object):
+    options = coll.OrderedDict()
     defaults =  (
                     ('train_steps', 50), 
-                    ('test_steps', 12), 
+                    ('test_steps', 10), 
+                    ('batch_size', 15),
                     (LABEL_SAMPLE_SIZE, None), 
-                    ('list_cwd', False), 
+                    
                     ('model_depth', 3), 
-                    ('drop_labels', False),
                     ('compression_fac', 400), #300/60ep@60st is decent enough
+                    ('depth_scaling', 2),
+                    
                     (SAVE_EVERY, 10),
                     (SAVE_TAILS, False),
+                    
+                    ('list_cwd', False), 
+                    ('drop_labels', False),
                 )
 
     def __init__(self, opts=None, **kwargs):
@@ -30,3 +36,7 @@ class MenuConfiguration(object):
         self.options['cmd'] = None
         self.options.pop('cmd')
         # TODO: clean up the kwargs
+        
+    def get(self, opt_key, fallback=None):
+        option_val = self.options.get(opt_key, fallback)
+        return option_val

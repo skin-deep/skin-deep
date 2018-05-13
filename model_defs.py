@@ -2,6 +2,7 @@ import sys, os, shutil
 import pickle
 import pandas as pd
 import matplotlib.pyplot as plt
+import SDutils
 
 class ExpressionModel(object):
     """Container for ML models."""
@@ -243,13 +244,16 @@ class variational_deep_AE(labeled_AE):
     def build(cls, datashape, activators=None, compression_fac=None, **kwargs):
         activators = activators or {'deep': 'selu', 'regression': 'linear'}
         uncompr_size, compr_size = cls.calculate_sizes(datashape, compression_fac)
+        
         # deep levels handling:
         deep_lvls = kwargs.get('depth', 1)
         try: deep_lvls = max(1, abs(int(deep_lvls)))
         except Exception: deep_lvls = 1
         
+        depth_scaling = kwargs.get('depth_scaling') or 2 # layer size increase rate for each deep level between representation and endpoints
+        
         clamp_size = lambda S: max(1, min(S, uncompr_size-1))
-        lay_sizes = [clamp_size(compr_size * (2**lvl)) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
+        lay_sizes = [clamp_size(compr_size * (depth_scaling**lvl)) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
         print(lay_sizes)
 
         # layers
@@ -257,14 +261,14 @@ class variational_deep_AE(labeled_AE):
         inbound = cls.DLbackend.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
         last_lay = inbound
         
-        last_lay = cls.input_preprocessing(last_lay, **kwargs)
-        
+        preprocessed_inp = cls.input_preprocessing(last_lay, **kwargs)
+        last_lay = preprocessed_inp
         
         
         for (i, siz) in enumerate(lay_sizes[:-1]):
             print(str(i)+':', siz or "NONE!")
             encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', 
-                                                      activity_regularizer = cls.DLbackend.regularizers.l2(0.01),
+                                                      #activity_regularizer = cls.DLbackend.regularizers.l2(0.01),
                                                       name='encoder_{}'.format(i)
                                                      )
             last_lay = encoder_node(last_lay)
@@ -301,16 +305,6 @@ class variational_deep_AE(labeled_AE):
         
         # Diagnostician: vals -> class; functions as the adversarial component of the model
         
-        # 'interface' layer for inspecting latent spaces as a predictive ensemble
-        #ensemble_inputs = {enc_out_layer}
-        #interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', 650), activation='linear', activity_regularizer=cls.DLbackend.regularizers.l1(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
-        #for assay_latent_space in ensemble_inputs:
-        #    # corrupt each input separately
-        #    diagger_inp = cls.DLbackend.layers.AlphaDropout(0.05)(assay_latent_space)
-        #    # connect the interface layer to each input
-        #    diagger = interface_node(diagger_inp)
-            
-        
         diagger = cls.DLbackend.layers.Dense(3, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
                                                 name='diagnosis')
@@ -335,38 +329,53 @@ class variational_deep_AE(labeled_AE):
         return (Autoencoder, Encoder, Diagnostician)
         
     @staticmethod
-    def batchgen(source, catlabels): 
+    def batchgen(source, catlabels, batch_size=3): 
         """Defines data to retrieve from inputs on a per-model basis.
         :param source: an iterable of data
         :param catlabels: category labels
+        :param batch_size: *starting* batch size; you may set new size on the returned generator without reinitializing
         """
-        import numpy as np
         import keras.backend as K
         
         def batcher():
-            for x in source:
-                expression = K.variable(x.sort_index().T.values)
-                #abs_exp = K.get_value(expression)#np.absolute(expression)
-                #xmax, xmin = abs_exp.max(), abs_exp.min()
-
-                expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([0.8]), beta=K.variable([0]), reduction_axes=[1])
-                expression = K.eval(expression)
+            _size = batch_size
+            while source:
+                batch_expressions = None
+                batch_diagnoses = None
                 
-                diagnosis = np.array(catlabels.get(str(x.index.name).upper()))
-                #print("\n", "EXPR: ", "\n", xmin, expression.min(), "\n", xmax, expression.max(), "\n", abs_exp, "\n", expression)
-                #if input('Cont.?'): break
-                #print("\n", "DIAG: ", "\n", diagnosis, "\n", x.index.name, "\n", catlabels, "\n")
+                for i in range(batch_size):
+                    x = next(source)
+                    expression = K.variable(x.sort_index().T.values)
+                    raw_expr = K.get_value(expression)
+                    xmax, xmin = raw_expr.max(), raw_expr.min()
+
+                    expression, expr_mean, expr_var = SDutils.inp_batch_norm(expression)
+                    
+                    diagnosis = K.variable(catlabels.get(str(x.index.name).upper()))
+                    #print("\n", "EXPR: ", "\n", xmin, K.eval(expression).min(), "\n", xmax, K.eval(expression).max(), "\n", raw_expr, "\n", expression)
+                    #if input('Cont.?'): break
+                    #print("\n", "DIAG: ", "\n", K.eval(diagnosis), "\n", x.index.name, "\n", catlabels, "\n")
+                    batch_expressions = K.concatenate([batch_expressions, expression], axis=0) if batch_expressions is not None else expression
+                    batch_diagnoses = K.concatenate([batch_diagnoses, diagnosis], axis=0) if batch_diagnoses is not None else diagnosis
+                    
+                #print("\n", "BATCH: ", "\n", K.eval(batch_expressions), "\n", K.eval(batch_diagnoses), "\n",)
+                #if input('Cont.?'): raise RuntimeError
+                    
                 batch = ((
                             {
-                             'expression_in': expression,
-                             'diagnosis_in': diagnosis,
+                             'expression_in': K.eval(batch_expressions),
+                             'diagnosis_in': K.eval(batch_diagnoses),
                             },
                             {
-                             'expression_out': expression,
-                             'diagnosis': diagnosis,
+                             'expression_out': K.eval(batch_expressions),
+                             'diagnosis': K.eval(batch_diagnoses),
                             }
                         ))
-                yield batch
+                new_size = yield batch
+                try: new_size = abs(int(new_size))
+                except Exception as E: new_size = None
+                _size = new_size if new_size and new_size > 0 else _size
+                
         return batcher()
     
 def build_models(datashape, which='labeledAE', activators=None, **kwargs):
