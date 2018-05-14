@@ -20,8 +20,8 @@ def log_params(logstr, dest='LOGS', to_print=True, *args, **kwargs):
 def inp_batch_norm(expression):
     """Provides a common set of parameters for preprocessing batch normalization between modules."""
     import keras.backend as K
-    expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([10]), beta=K.variable([0]), reduction_axes=[1])
-    return expression, expr_mean, expr_var
+    #expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([10]), beta=K.variable([0]), reduction_axes=[1])
+    return expression,0,0#, expr_mean, expr_var
         
         
 def main(*args, **kwargs):
