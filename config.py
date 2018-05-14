@@ -12,12 +12,12 @@ class MenuConfiguration(object):
     defaults =  (
                     ('train_steps', 50), 
                     ('test_steps', 10), 
-                    ('batch_size', 5),
+                    ('batch_size', 7),
                     (LABEL_SAMPLE_SIZE, None), 
                     
-                    ('model_depth', 3), 
-                    ('compression_fac', 100),
-                    ('depth_scaling', 3),
+                    ('model_depth', 4), 
+                    ('compression_fac', 300),
+                    ('depth_scaling', 2),
                     
                     (SAVE_EVERY, 10),
                     (SAVE_TAILS, False),

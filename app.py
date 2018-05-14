@@ -130,7 +130,7 @@ class SkinApp(object):
                                                   initial_epoch=e-1, epochs=e,
                                                   
                                                   callbacks=[
-                                                            Callbacks.CSVLogger(filename='trainlog.csv', append=True),
+                                                            Callbacks.CSVLogger(filename='trainlog.csv', append=False),
                                                             Callbacks.ReduceLROnPlateau(monitor='diagnosis_loss', 
                                                                                          factor=0.75, 
                                                                                          patience=5, 
@@ -171,7 +171,7 @@ class SkinApp(object):
             
             return mdl
             
-        mdl_optimizer = kerasLazy().optimizers.Nadam()
+        mdl_optimizer = kerasLazy().optimizers.adam(amsgrad=True)
         mdl_losses = {'default': 'mse'}
         
         models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) for (i,x) in enumerate(built_models)]
