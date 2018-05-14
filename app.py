@@ -130,7 +130,7 @@ class SkinApp(object):
                                                   initial_epoch=e-1, epochs=e,
                                                   
                                                   callbacks=[
-                                                            Callbacks.CSVLogger(filename='trainlog.csv', append=False),
+                                                            Callbacks.CSVLogger(filename='trainlog.csv', append=True),
                                                             Callbacks.ReduceLROnPlateau(monitor='diagnosis_loss', 
                                                                                          factor=0.75, 
                                                                                          patience=5, 

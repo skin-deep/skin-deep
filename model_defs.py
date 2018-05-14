@@ -289,7 +289,7 @@ class variational_deep_AE(labeled_AE):
             # encoder output layer:
             enc_out_layer = latent_vector
             
-        Encoder = cls.DLmodel(inbound, enc_out_layer, name='Encoder')
+        Encoder = cls.DLmodel(inbound, enc_mean, name='Encoder')
         
         # Decoder: compressed vals -> regression vals
         dec_start = None
@@ -309,12 +309,15 @@ class variational_deep_AE(labeled_AE):
         diagger = cls.DLbackend.layers.Dense(3, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
                                                 kernel_regularizer=cls.DLbackend.regularizers.l1(0.01),
+                                                bias_regularizer=cls.DLbackend.regularizers.l1(0.25),
                                                 name='diagnosis')
         base_diagnosis = diagger(inbound)
         diagnosis = diagger(decoded)
+        
+        decoder_inp = cls.DLmodel.Input(shape=(enc_out_layer,))
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, base_diagnosis], name='Autoencoder')
-        Decoder = cls.DLmodel(inputs=[inbound], outputs=[decoded], name='Decoder')
+        Decoder = cls.DLmodel(inputs=[decoder_inp], outputs=[decoded], name='Decoder')
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Diagnostician')
         
         def VAE_loss(inp, outp):
@@ -328,7 +331,7 @@ class variational_deep_AE(labeled_AE):
             return total_loss
         Autoencoder.custom_loss = VAE_loss
 
-        return (Autoencoder, Encoder, Diagnostician)
+        return (Autoencoder, Encoder, Diagnostician, Decoder)
         
     @staticmethod
     def batchgen(source, catlabels, batch_size=3): 
