@@ -241,6 +241,7 @@ class labeled_AE(deep_AE):
         
 class variational_deep_AE(labeled_AE):
 
+    @classmethod
     def build(cls, datashape, activators=None, compression_fac=None, **kwargs):
         activators = activators or {'deep': 'selu', 'regression': 'linear'}
         uncompr_size, compr_size = cls.calculate_sizes(datashape, compression_fac)
@@ -277,14 +278,15 @@ class variational_deep_AE(labeled_AE):
             # VAE stuff:
             latent_dims = 2
             enc_mean = cls.DLbackend.layers.Dense(latent_dims, name='encoded_mean'.format())(last_lay)
-            enc_stdev = cls.DLbackend.layers.Dense(latent_dims, name='encoded_log-stdev'.format())(last_lay)
+            enc_logstdev = cls.DLbackend.layers.Dense(latent_dims, name='encoded_log-stdev'.format())(last_lay)
             
-            def sampler(mean, log_stddev):
+            def sampler(distribution_params):
+                mean, log_stddev = distribution_params
                 import keras.backend as K
                 std_norm = K.random_normal(shape=(K.shape(mean)[0], latent_dims), mean=0, stddev=1)
                 return mean + K.exp(log_stddev) * std_norm
             
-            latent_vector = Lambda(sampler)([enc_mean, enc_logstdev])
+            latent_vector = cls.DLbackend.layers.Lambda(sampler, output_shape=(latent_dims,))([enc_mean, enc_logstdev])
             
             # encoder output layer:
             enc_out_layer = latent_vector
@@ -309,29 +311,31 @@ class variational_deep_AE(labeled_AE):
         diagger = cls.DLbackend.layers.Dense(3, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
                                                 kernel_regularizer=cls.DLbackend.regularizers.l1(0.01),
-                                                bias_regularizer=cls.DLbackend.regularizers.l1(0.25),
+                                                bias_regularizer=cls.DLbackend.regularizers.l1(0.05),
                                                 name='diagnosis')
         base_diagnosis = diagger(inbound)
         diagnosis = diagger(decoded)
         
-        decoder_inp = cls.DLmodel.Input(shape=(enc_out_layer,))
+        decoder_inp = cls.DLbackend.layers.Input(shape=(latent_dims,))
             
         Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, base_diagnosis], name='Autoencoder')
-        Decoder = cls.DLmodel(inputs=[decoder_inp], outputs=[decoded], name='Decoder')
+        Decoder = cls.DLmodel(inputs=[inbound, decoder_inp], outputs=[decoded], name='Decoder')
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Diagnostician')
         
         def VAE_loss(inp, outp):
             """Axis-wise KL-Div + loss-of-predictor KL-Div"""
+            
             import keras.backend as K
             # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
             reconstruction_loss = K.categorical_crossentropy(base_diagnosis, diagnosis)
             
             kl_loss = -0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
-            total_loss = K.mean(reconstruction_loss + kl_loss)    
+            total_loss = kl_loss + reconstruction_loss
+            #total_loss = reconstruction_loss
             return total_loss
         Autoencoder.custom_loss = VAE_loss
 
-        return (Autoencoder, Encoder, Diagnostician, Decoder)
+        return Autoencoder, Encoder, Diagnostician, Decoder
         
     @staticmethod
     def batchgen(source, catlabels, batch_size=3): 
@@ -390,7 +394,7 @@ def build_models(datashape, which='VAE', activators=None, **kwargs):
     model_to_build = which if isinstance(which, ExpressionModel) else model_dict.get(which, NotImplemented)
     if model_to_build is NotImplemented: raise NotImplementedError
     built = model_to_build(datashape, activators, **kwargs)
-    print("Built model: {} ({})".format(which, built))
+    print("Built model: {} {}".format(which, built))
     return built
     
 def main(datashape=None, which_model=None):

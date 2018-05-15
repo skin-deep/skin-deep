@@ -40,8 +40,8 @@ class SkinApp(object):
     
     def __init__(self, *args, **kwargs):
         self.prediction, self.history, self.modelpath = None, None, None
-        self.model = [None, None, None]
         self.config = config.MenuConfiguration({self.DBG_MODE : False,}, **kwargs)
+        self.model = [None for _ in range(self.config.get('model_amt', 4))]
         self.actionqueque = coll.deque()
         #self.config.options.update(sorted([('verbosity', verbose), ('xml_path', xml), ('txt_path', txt), ('directory', dir)]))
         
@@ -174,7 +174,9 @@ class SkinApp(object):
         mdl_optimizer = kerasLazy().optimizers.adam(amsgrad=True)
         mdl_losses = {'default': 'mse'}
         
-        models = [(models or [None]*(i+1))[i] or Compile(mdl=built_models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) for (i,x) in enumerate(built_models)]
+        models =[print(i, models) or (models or [None for _ in range(i+1)])[i] 
+                 or Compile(mdl=built_models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) 
+                for (i,x) in enumerate(built_models)]
         if kwargs.get('recompile', False): models = [Compile(mdl=models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) for (i,x) in enumerate(models)]
         
         self.model = models
@@ -343,7 +345,7 @@ class SkinApp(object):
                 except Exception as Err: pass
                 
                 if _tmp: 
-                    model = list(self.model or [None, None, None])
+                    model = list(self.model or [None for x in range(self.config.get('model_amt', 4))])
                     model[0] = _tmp
                     
                     for i, newmod in enumerate(model):
