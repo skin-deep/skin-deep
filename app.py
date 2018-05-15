@@ -146,15 +146,15 @@ class SkinApp(object):
                      'train': lambda x, e: (trainfunc(x, e)),
                     }.get(mode)
         
-        built_models = [None for x in range(self.config.get('model_amt', 3))]
+        built_models = [None for x in range(self.config.get('model_amt', 4))]
         SDutils.log_params("SIZE: " + str(size))
         
         if models is None or not all(models): 
             print(built_models)
             K = kerasLazy().backend
             built_models = self.build_models(datashape=size, kind=model_type, labels=K.eval(K.variable(np.array(tuple(catlabels.values())))),
-                                            compression_fac=self.config.get('compression_fac', 256),
-                                            depth=self.config.get('model_depth', 3),
+                                            compression_fac=self.config.get('compression_fac', 1000),
+                                            depth=self.config.get('model_depth', 4),
                                             activators=self.config.get('activators'),
                                             )
         

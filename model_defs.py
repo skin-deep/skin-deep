@@ -383,14 +383,14 @@ class variational_deep_AE(labeled_AE):
                 
         return batcher()
     
-def build_models(datashape, which='labeledAE', activators=None, **kwargs):
+def build_models(datashape, which='VAE', activators=None, **kwargs):
     if not activators: activators = {'deep': 'selu', 'regression': 'linear', 'classification': 'softmax'}
-    model_dict = {'deepAE': deep_AE, 'deepAE-dropout': deepAE_dropout, 'labeledAE': labeled_AE}
+    model_dict = {'deepAE': deep_AE, 'deepAE-dropout': deepAE_dropout, 'labeledAE': labeled_AE, 'VAE': variational_deep_AE}
     print(kwargs.get('labels'))
     model_to_build = which if isinstance(which, ExpressionModel) else model_dict.get(which, NotImplemented)
     if model_to_build is NotImplemented: raise NotImplementedError
     built = model_to_build(datashape, activators, **kwargs)
-    print("Built model: {}".format(built))
+    print("Built model: {} ({})".format(which, built))
     return built
     
 def main(datashape=None, which_model=None):

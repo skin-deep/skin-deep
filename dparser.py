@@ -348,8 +348,11 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
         #print(guess, topprob, diagnosis)
     predarray = pd.Series(predarray[0].flatten(), name="{}=>({} @{}%)".format(batch.columns[0], diagnosis, np.round(topprob, 0))).to_frame()
     genelabels = kwargs.get('genes')
-    diff = pd.Series(np.subtract(predarray.values, batch.values).flatten()).rename('diff for {}'.format(batch.columns.values[-1])).to_frame().set_index(genelabels)
-    print(diff)
+    #diff = pd.Series(np.subtract(predarray.values, batch.values).flatten()).rename('diff for {}'.format(batch.columns.values[-1])).to_frame().set_index(genelabels)
+    #print(diff)
+    
+    import keras.backend as K
+    batch = batch.apply(lambda BT: K.eval(K.transpose(Logger.inp_batch_norm(K.variable([BT.values]))[0])), axis=1)
     if genelabels is not None: predarray = predarray.set_index(genelabels)
     #print("PROCESSED: \n\n", predarray)
     predarray = pd.concat({'original':batch, 'predicted':predarray}, axis=1)
