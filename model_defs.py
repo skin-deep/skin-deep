@@ -239,6 +239,80 @@ class labeled_AE(deep_AE):
         return (Autoencoder, Encoder, Diagnostician)
         
         
+class coherent_AE(labeled_AE):
+    @classmethod
+    def build(cls, datashape, activators=None, compression_fac=None, **kwargs):
+        labels = kwargs.get('labels')
+        activators = activators or {'deep': 'selu', 'regression': 'linear'}
+        uncompr_size, compr_size = cls.calculate_sizes(datashape, compression_fac)
+        # deep levels handling:
+        deep_lvls = kwargs.get('depth', 1)
+        try: deep_lvls = max(1, abs(int(deep_lvls)))
+        except Exception: deep_lvls = 1
+        
+        clamp_size = lambda S: max(1, min(S, uncompr_size-1))
+        lay_sizes = [clamp_size(compr_size * (2**lvl)) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
+        print(lay_sizes)
+
+        # layers
+        # Encoder: vals -> compressed vals
+        inbound = cls.DLbackend.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
+        last_lay = inbound
+        
+        last_lay = cls.input_preprocessing(last_lay, **kwargs)
+        
+        for (i, siz) in enumerate(lay_sizes):
+            print(str(i)+':', siz or "NONE!")
+            encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i),
+                                                        kernel_regularizer=cls.DLbackend.regularizers.l1_l2(l1=0.01, l2=0.01)
+                                                     )
+            last_lay = encoder_node(last_lay)
+        else: enc_out_layer = last_lay
+        
+        Encoder = cls.DLmodel(inbound, enc_out_layer, name='Encoder')
+        
+        # Decoder: compressed vals -> regression vals
+        dec_start = None
+        for (i, siz) in enumerate(reversed(lay_sizes[:-1])):
+            #print(i, siz)
+            decoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
+            decoded = decoder_node(last_lay)
+            last_lay = decoded
+            dec_start = dec_start or decoder_node
+        # let's make sure the last layer is 1:1 to input no matter what
+        decoder_node = cls.DLbackend.layers.Dense(Encoder.layers[0].input_shape[-1], activation=activators.get('regression', 'linear'), kernel_initializer='lecun_normal', name='expression_out')
+        decoded = decoder_node(last_lay)
+        dec_start = dec_start or decoder_node
+        
+        # Diagnostician: vals -> class
+        diagger = cls.DLbackend.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
+                                                kernel_initializer='lecun_normal', kernel_regularizer=cls.DLbackend.regularizers.l1(0.1),
+                                                name='diagnosis')(diagger)
+        
+        base_diagnosis = diagger(inbound)
+        diagnosis = diagger(decoded)
+        
+        def diagnosis_loss(inp, outp):
+            """Axis-wise KL-Div + loss-of-predictor KL-Div"""
+            
+            import keras.backend as K
+            # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
+            reconstruction_loss = K.categorical_crossentropy(base_diagnosis, diagnosis)
+            
+            return reconstruction_loss
+            
+        Autoencoder.custom_loss = diagnosis_loss
+            
+        Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis, base_diagnosis], name='Autoencoder')
+        
+        Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[base_diagnosis], name='Diagnostician')
+        # dummy input for feeding into Decoder separately
+        #dummy_in = cls.DLbackend.layers.Input([Encoder.layers[-1].output_shape[-1]])
+        #Decoder = cls.DLmodel(dummy_in, dec_start(dummy_in), name='Decoder') #this is bullshit rn
+
+        return (Autoencoder, Encoder, Diagnostician)
+        
+        
 class variational_deep_AE(labeled_AE):
 
     @classmethod
@@ -252,9 +326,11 @@ class variational_deep_AE(labeled_AE):
         except Exception: deep_lvls = 1
         
         depth_scaling = kwargs.get('depth_scaling') or 2 # layer size increase rate for each deep level between representation and endpoints
-        print("Depth Scaling: {}\n".format(depth_scaling))
+        print("Depth scaling: {}\n".format(depth_scaling))
         
         clamp_size = lambda S: max(1, min(S, uncompr_size-1))
+        #hidden_size_span = (uncompr_size - compr_size) / depth_scaling
+        #lay_sizes = [clamp_size(compr_size + (round(hidden_size_span * lvl/deep_lvls))) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
         lay_sizes = [clamp_size(round(compr_size * (depth_scaling**lvl))) for lvl in reversed(range(deep_lvls))] # FIFO sizes for encoders!
         print(lay_sizes)
 
@@ -265,7 +341,6 @@ class variational_deep_AE(labeled_AE):
         
         preprocessed_inp = inbound #cls.input_preprocessing(last_lay, **kwargs)
         last_lay = preprocessed_inp
-        
         
         for (i, siz) in enumerate(lay_sizes[:-1]):
             print(str(i)+':', siz or "NONE!")
@@ -318,21 +393,21 @@ class variational_deep_AE(labeled_AE):
         
         decoder_inp = cls.DLbackend.layers.Input(shape=(latent_dims,))
             
-        Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, base_diagnosis], name='Autoencoder')
+        Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, diagnosis], name='Autoencoder')
         Decoder = cls.DLmodel(inputs=[inbound, decoder_inp], outputs=[decoded], name='Decoder')
-        Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Diagnostician')
+        Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[base_diagnosis], name='Diagnostician')
         
         def VAE_loss(inp, outp):
             """Axis-wise KL-Div + loss-of-predictor KL-Div"""
-            
             import keras.backend as K
-            # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
-            reconstruction_loss = K.categorical_crossentropy(base_diagnosis, diagnosis)
             
-            kl_loss = -0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
-            total_loss = kl_loss + reconstruction_loss
-            #total_loss = reconstruction_loss
+            #kl_loss = -0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
+            # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
+            reconstruction_loss = K.categorical_crossentropy(base_diagnosis, diagnosis)# (K.log(kl_loss+K.epsilon()))
+            
+            total_loss = reconstruction_loss
             return total_loss
+            
         Autoencoder.custom_loss = VAE_loss
 
         return Autoencoder, Encoder, Diagnostician, Decoder
@@ -389,7 +464,7 @@ class variational_deep_AE(labeled_AE):
     
 def build_models(datashape, which='VAE', activators=None, **kwargs):
     if not activators: activators = {'deep': 'selu', 'regression': 'linear', 'classification': 'softmax'}
-    model_dict = {'deepAE': deep_AE, 'deepAE-dropout': deepAE_dropout, 'labeledAE': labeled_AE, 'VAE': variational_deep_AE}
+    model_dict = {'deepAE': deep_AE, 'deepAE-dropout': deepAE_dropout, 'labeledAE': labeled_AE, 'VAE': variational_deep_AE, 'coherentAE': coherent_AE}
     print(kwargs.get('labels'))
     model_to_build = which if isinstance(which, ExpressionModel) else model_dict.get(which, NotImplemented)
     if model_to_build is NotImplemented: raise NotImplementedError
