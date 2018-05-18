@@ -339,20 +339,23 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
     #Logger.log_params("RAW: \n{}".format(predarray))
     #if batch is not None: print("BATCH: \n", batch)
     if batch is not None: print("SAMPLE: ", batch.columns.values[-1])
-    diagarray, topprob, diagnosis = np.array([predarray[1][-1]]), -1., None
+    print("PRED: \n", predarray)
+    diagarray, topprob, diagnosis = np.array([predarray[-1][-1]]), -1., None
     if labels: Logger.log_params("PROBABILITIES: ")
     for (labl, onehot) in labels.items():
         guess = np.round(np.nanmax(onehot*diagarray)*100, 2)
         Logger.log_params("{LAB}: {PROB}%".format(LAB=labl, PROB=(guess or '<0.01')))
         if guess > topprob: diagnosis, topprob = labl, guess
         #print(guess, topprob, diagnosis)
+
     predarray = pd.Series(predarray[0].flatten(), name="{}=>({} @{}%)".format(batch.columns[0], diagnosis, np.round(topprob, 0))).to_frame()
+    
     genelabels = kwargs.get('genes')
     #diff = pd.Series(np.subtract(predarray.values, batch.values).flatten()).rename('diff for {}'.format(batch.columns.values[-1])).to_frame().set_index(genelabels)
     #print(diff)
     
-    import keras.backend as K
-    batch = batch.apply(lambda BT: K.eval(K.transpose(Logger.inp_batch_norm(K.variable([BT.values]))[0])), axis=1)
+    #import keras.backend as K
+    #batch = batch.apply(lambda BT: K.eval(K.transpose(Logger.inp_batch_norm(K.variable([BT.values]))[0])), axis=1)
     if genelabels is not None: predarray = predarray.set_index(genelabels)
     #print("PROCESSED: \n\n", predarray)
     predarray = pd.concat({'original':batch, 'predicted':predarray}, axis=1)

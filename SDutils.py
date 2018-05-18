@@ -21,7 +21,7 @@ def inp_batch_norm(expression):
     """Provides a common set of parameters for preprocessing batch normalization between modules."""
     import keras.backend as K
     #expression = K.log(expression)
-    #expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([10]), beta=K.variable([0]), reduction_axes=[1])
+    #expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([1]), beta=K.variable([0]), reduction_axes=[1])
     return expression,0,0#, expr_mean, expr_var
         
         

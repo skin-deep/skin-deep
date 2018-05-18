@@ -10,18 +10,19 @@ which_model = 0 # TEMPORARY VAR, REMOVE ME!
 class MenuConfiguration(object):
     options = coll.OrderedDict()
     defaults =  (
-                    ('train_steps', 50), 
+                    ('train_steps', 30), 
                     ('test_steps', 10), 
-                    ('batch_size', 7),
+                    ('batch_size', 10),
                     (LABEL_SAMPLE_SIZE, None), 
                     
-                    ('model_depth', 4), 
-                    ('compression_fac', 900),
-                    ('depth_scaling', 2.5),
+                    ('model_depth', 8), 
+                    ('compression_fac', 5000),
+                    ('depth_scaling', 1.5333),
                     
                     (SAVE_EVERY, 10),
                     (SAVE_TAILS, False),
                     
+                    ('which_model', 0),
                     ('list_cwd', False), 
                     ('drop_labels', False),
                 )

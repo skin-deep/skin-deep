@@ -115,14 +115,14 @@ class SkinApp(object):
             expression = K.eval(expression)
             #ENDNORM
             
-            prediction = models[config.which_model].predict_on_batch([expression])
+            prediction = models[self.config.get('which_model')].predict_on_batch([expression])
             SDutils.log_params("Actual type: {}".format(str(batch.index.name)))
             prediction = geo.parse_prediction(prediction, catlabels, batch=batch, genes=genelabels)
             return prediction
             
         def trainfunc(models, e=1):
             Callbacks = kerasLazy().callbacks
-            trained_model = models[0]
+            trained_model = models[self.config.get('which_model')]
             history = trained_model.fit_generator(model_type.batchgen(source=sampled[0], catlabels=catlabels, 
             
                                                   batch_size=self.config.get('batch_size', 5)),
@@ -164,14 +164,14 @@ class SkinApp(object):
             
             if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
-                                 loss_weights={'diagnosis': 6, 'expression_out': 2,},
+                                 loss_weights={'diagnosis': 46, 'expression_out': 2,},
                                  metrics={'diagnosis': 'categorical_accuracy'},
                                  )
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             
             return mdl
             
-        mdl_optimizer = kerasLazy().optimizers.adam(amsgrad=True)
+        mdl_optimizer = kerasLazy().optimizers.Adam(amsgrad=True)
         mdl_losses = {'default': 'mse'}
         
         models =[print(i, models) or (models or [None for _ in range(i+1)])[i] 

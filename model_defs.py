@@ -401,11 +401,11 @@ class variational_deep_AE(labeled_AE):
             """Axis-wise KL-Div + loss-of-predictor KL-Div"""
             import keras.backend as K
             
-            #kl_loss = -0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
+            kl_loss = -0.5 * K.sum(1 + enc_logstdev - K.square(enc_mean) - K.square(K.exp(enc_logstdev)), axis=-1)
             # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
             reconstruction_loss = K.categorical_crossentropy(base_diagnosis, diagnosis)# (K.log(kl_loss+K.epsilon()))
             
-            total_loss = reconstruction_loss
+            total_loss = K.mean(reconstruction_loss + kl_loss)
             return total_loss
             
         Autoencoder.custom_loss = VAE_loss
