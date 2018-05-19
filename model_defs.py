@@ -386,7 +386,7 @@ class variational_deep_AE(labeled_AE):
         diagger = cls.DLbackend.layers.Dense(3, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
                                                 kernel_regularizer=cls.DLbackend.regularizers.l1(0.01),
-                                                bias_regularizer=cls.DLbackend.regularizers.l1(0.05),
+                                                use_bias=False,
                                                 name='diagnosis')
         base_diagnosis = diagger(inbound)
         diagnosis = diagger(decoded)
