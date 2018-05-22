@@ -6,6 +6,7 @@ import numpy as np
 import xml.etree.ElementTree as ET
 import itertools as itt
 import re
+from importlib import reload
 
 import SDutils as Logger
 
@@ -91,7 +92,7 @@ def get_patient_type(dframe, keys=None, **kwargs):
     labels = (
             kwargs.get('labels') 
             or {} 
-            or {'Severe':'PP', 'Mild':'PP', 'Normal':'NN', '<other>':'NN', 'Control':'NN', 'Involved':'PP', 'Uninvolved':'PN', 'Lesion':'PN', '_Lesional':'PP', '_Non-lesional':'PN', 'NL':'PN', 'LS':'PP', 'acne':'NN'}
+            or {'Severe':'PP', 'Mild':'PN', 'Normal':'NN', '<other>':'NN', 'Control':'NN', 'Involved':'PP', 'Uninvolved':'PN', 'Lesion':'PN', '_Lesional':'PP', '_Non-lesional':'PN', 'NL':'PN', 'LS':'PP', 'acne':'NN', 'Day':'PN'}
             )
     labels = {str(k).upper(): v for k,v in labels.items()} # standardize keys
     #print("KS1!: ", keys)

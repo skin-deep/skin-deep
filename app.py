@@ -160,12 +160,18 @@ class SkinApp(object):
         
         def Compile(mdl, i=1, *args, **kwargs): 
             SDutils.log_params("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl) + str(kwargs))
-            def merge_losses(*losses): return kerasLazy().backend.mean(kerasLazy().backend.sum(*[l() for l in losses]))
-            
-            if i==0: mdl.compile(optimizer=kwargs.get('optimizer'), 
+            def merge_losses(*losses): return kerasLazy().backend.mean(kerasLazy().backend.sum(*[l() for l in losses]))         
+            if i==0: mdl.compile(
+                                 optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
-                                 loss_weights={'diagnosis': 46, 'expression_out': 2,},
-                                 metrics={'diagnosis': 'categorical_accuracy'},
+                                 loss_weights={'diagnosis': 38, 'expression_out': 2,},
+                                 metrics={'diagnosis': ['categorical_accuracy']},
+                                 )
+            elif i==2: mdl.compile(
+                                 optimizer=kwargs.get('optimizer'), 
+                                 loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
+                                 loss_weights={'diagnosis': 4, 'expression_out': 2,},
+                                 metrics={'diagnosis': ['categorical_accuracy']},
                                  )
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             

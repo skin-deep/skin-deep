@@ -316,6 +316,12 @@ class coherent_AE(labeled_AE):
 class variational_deep_AE(labeled_AE):
 
     @classmethod
+    def input_preprocessing(cls, input_lay, *args, **kwargs):
+            transformed = input_lay
+            transformed = cls.DLbackend.layers.AlphaDropout(0.1)(transformed)
+            return transformed
+
+    @classmethod
     def build(cls, datashape, activators=None, compression_fac=None, **kwargs):
         activators = activators or {'deep': 'selu', 'regression': 'linear'}
         uncompr_size, compr_size = cls.calculate_sizes(datashape, compression_fac)
@@ -339,7 +345,7 @@ class variational_deep_AE(labeled_AE):
         inbound = cls.DLbackend.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
         last_lay = inbound
         
-        preprocessed_inp = inbound #cls.input_preprocessing(last_lay, **kwargs)
+        preprocessed_inp = cls.input_preprocessing(last_lay, **kwargs)
         last_lay = preprocessed_inp
         
         for (i, siz) in enumerate(lay_sizes[:-1]):
@@ -379,6 +385,7 @@ class variational_deep_AE(labeled_AE):
         # let's make sure the last layer is 1:1 to input no matter what
         decoder_node = cls.DLbackend.layers.Dense(Encoder.layers[0].input_shape[-1], activation=activators.get('regression', 'linear'), kernel_initializer='lecun_normal', name='expression_out')
         decoded = decoder_node(last_lay)
+        dropout_decoded = cls.DLbackend.layers.AlphaDropout(0.1)(decoded)
         dec_start = dec_start or decoder_node
         
         # Diagnostician: vals -> class; functions as the adversarial component of the model
@@ -388,8 +395,9 @@ class variational_deep_AE(labeled_AE):
                                                 kernel_regularizer=cls.DLbackend.regularizers.l1(0.01),
                                                 use_bias=False,
                                                 name='diagnosis')
-        base_diagnosis = diagger(inbound)
-        diagnosis = diagger(decoded)
+        base_diagnosis = diagger(preprocessed_inp)
+        diagnosis = diagger(dropout_decoded)
+        
         
         decoder_inp = cls.DLbackend.layers.Input(shape=(latent_dims,))
             
