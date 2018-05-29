@@ -1,6 +1,8 @@
 import sys, os, shutil
 import pickle
 import datetime
+import functools
+from sklearn import preprocessing
 
 def log_params(logstr, dest='LOGS', to_print=True, *args, **kwargs):
     logstr = str(logstr)
@@ -19,11 +21,19 @@ def log_params(logstr, dest='LOGS', to_print=True, *args, **kwargs):
 
 def inp_batch_norm(expression):
     """Provides a common set of parameters for preprocessing batch normalization between modules."""
+    #import keras
     import keras.backend as K
+    expression = K.variable(expression)
     #expression = K.log(expression)
-    #expression, expr_mean, expr_var = K.normalize_batch_in_training(expression, gamma=K.variable([4]), beta=K.variable([0]), reduction_axes=[1])
+    #
+    expression = K.softmax(expression)
+    #expression, expr_mean, expr_var = (K.normalize_batch_in_training(expression, gamma=K.variable([1]), beta=K.variable([0]), reduction_axes=[1]))
+    expression = K.eval(expression)
+    
+    #expression = preprocessing.minmax_scale(expression, (1, 100), axis=1)
+    expression = preprocessing.scale(expression, axis=1)
+    
     return expression,0,0#, expr_mean, expr_var
-        
         
 def main(*args, **kwargs):
     pass

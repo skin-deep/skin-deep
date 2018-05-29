@@ -84,15 +84,20 @@ def clean_xmls(parsed_input, *args, **kwargs):
 _key_cache = dict()
 def get_patient_type(dframe, keys=None, **kwargs):
     """Retrieves the label of the sample type from the Title field and returns it as a (new) dataframe."""
-    print('TITLE IS: {}'.format(dframe['Title']))
+    print('\nTITLE IS: {}'.format(dframe['Title']))
     print('KEYS: {}'.format(keys))
     #keys = (keys if isinstance(keys, dict) else {}) or _key_cache.get('Cached-1', {})
     #keys = tuple(keys.values()) if keys and isinstance(keys, dict) else keys
     if not isinstance(keys, dict): keys = set(keys or input('Enter sample type regexes (comma-separated): ').strip().split(','))
+    
+    try: 
+        reload(label_dicts)
+    except Exception as E:
+        import label_dicts
+    
     labels = (
-            kwargs.get('labels') 
-            or {} 
-            or {'Severe':'PP', 'Mild':'PN', 'Normal':'NN', '<other>':'NN', 'Control':'NN', 'Involved':'PP', 'Uninvolved':'PN', 'Lesion':'PN', '_Lesional':'PP', '_Non-lesional':'PN', 'NL':'PN', 'LS':'PP', 'acne':'NN', 'Day':'PN'}
+            kwargs.get('labels')
+            or label_dicts.default
             )
     labels = {str(k).upper(): v for k,v in labels.items()} # standardize keys
     #print("KS1!: ", keys)
@@ -101,7 +106,7 @@ def get_patient_type(dframe, keys=None, **kwargs):
     _key_cache['Cached-1'] = keys
     Logger.log_params("CACHE: " + str(_key_cache))
 
-    transformed = dframe.transform({'Title' : lambda x: ("/".join(keys.get(pat, 'ERROR') for pat in keys if re.search(pat, str(x), flags=re.I)) or '<other>')})
+    transformed = dframe.transform({'Title' : lambda x: ("/".join(keys.get(pat, 'ERROR') for pat in keys if re.search(pat, str(x), flags=re.I)) or str(x))})
     #transformed =  #filter out unlabelled?
     print(transformed)
     return transformed
@@ -190,6 +195,7 @@ def split_data(batches, test_to_train=0.2, shuffle=True):
         batch_size = len(data)
         ratio = abs(test_to_train)
         ratio = ratio if ratio <= 1 else ratio / 100 # accept percentages as ints too
+        print("SPLIT RATIO: {}% TEST/TRAIN")
         test_size = max(1, (batch_size * ratio) // 1)
 
         train, test = itt.chain({}), itt.chain({})
@@ -255,12 +261,14 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
         return (next(train))
     
     drop_label = drop_labels
+    
+    
     def nodrop_retrieve(pair):
         #print("NODROP CATS: ", categories)
         sample_lbl = str(pair[0]).upper()
         try: categories.update({sample_lbl: categories.get(sample_lbl, (sample_lbl if sample_lbl in categories.values() else '<unknown>'))})
         except ValueError: None if str(pair[0]).upper() in categories else sys.excepthook(*sys.exc_info())
-        #finally: print("PAIR 0 IS: {}".format([pair[0]]))
+        #finally: print("PAIR 1 IS: {}".format(pair[1]))
             
         retrieved = pair[1]
         retrieved = retrieved.rename_axis(pair[0], axis=0)
@@ -297,14 +305,17 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
     # turn categories into indices:
     #categories = set((categories or {}).values())
     Logger.log_params("Raw categories: {}".format(categories), to_print=True)
-    categories = ['NN', 'PP', 'PN'] #quick hack to be able to work...
+    categories = ['NN', 'PP', 'PN', 'IN'] #quick hack to be able to work...
     categories = dict(enumerate(sorted(categories)))
     # one-hot the categories:
     from keras.utils import to_categorical as categ_encode
     category_indices = np.array(tuple(categories.keys()), dtype=int).T
     encoding = categ_encode(category_indices)
+    #enc_mask = [1,0.4,1]
+    #encoding = encoding * enc_mask
     Logger.log_params("Encoding: \n{}".format(encoding), to_print=True)
     categories = {categories[i]:np.array([encoding[i]]) for (i,k) in enumerate(categories)}
+    #categories['PN'] = np.array([[0.5, 0.5]])
     Logger.log_params("Categories: {}".format(categories), to_print=True)
     
     mode = 'cross'#kwargs.get('mode', 'train')
@@ -323,7 +334,7 @@ def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
         size = nxt.size # sample the data for size
         samplesize = samplesize or size # None input - do not subsample
         safe_size = min(size, samplesize)
-        nxt = nxt[0+(safe_size*offset):(safe_size*(offset+1))] if size <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
+        nxt = nxt#[0+(safe_size*offset):(safe_size*(offset+1))] if size <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
         safe_size = nxt.T.shape
         out_generators[i] = itt.chain((nxt,), generators[i]) # return the sampled column for processing
         #import random
@@ -337,6 +348,7 @@ def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
 def parse_prediction(predarray, labels=None, *args, **kwargs):
     labels = labels or {}
     batch = kwargs.get('batch')
+    raw_expr = kwargs.get('raw_expr')
     #Logger.log_params("RAW: \n{}".format(predarray))
     #if batch is not None: print("BATCH: \n", batch)
     if batch is not None: print("SAMPLE: ", batch.columns.values[-1])
@@ -344,9 +356,13 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
     diagarray, topprob, diagnosis = np.array([predarray[-1][-1]]), -1., None
     if labels: Logger.log_params("PROBABILITIES: ")
     for (labl, onehot) in labels.items():
-        guess = np.round(np.nanmax(onehot*diagarray)*100, 2)
-        Logger.log_params("{LAB}: {PROB}%".format(LAB=labl, PROB=(guess or '<0.01')))
-        if guess > topprob: diagnosis, topprob = labl, guess
+        try:
+            guess = np.round(np.nanmax(onehot*diagarray)*100, 2)
+            Logger.log_params("{LAB}: {PROB}%".format(LAB=labl, PROB=(guess or '<0.01')))
+            if guess > topprob: diagnosis, topprob = labl, guess
+        except Exception as _E: 
+            print(labl, onehot)
+            print('Could not parse the prediction properly - {};\nRaw prediction: \n{}'.format(_E, diagarray))
         #print(guess, topprob, diagnosis)
 
     predarray = pd.Series(predarray[0].flatten(), name="{}=>({} @{}%)".format(batch.columns[0], diagnosis, np.round(topprob, 0))).to_frame()
@@ -358,7 +374,8 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
     #import keras.backend as K
     #batch = batch.apply(lambda BT: K.eval(K.transpose(Logger.inp_batch_norm(K.variable([BT.values]))[0])), axis=1)
     if genelabels is not None: predarray = predarray.set_index(genelabels)
-    #print("PROCESSED: \n\n", predarray)
+    print("PROCESSED: \n\n", raw_expr)
+    if raw_expr is not None: batch = pd.Series(raw_expr[-1], name=batch.columns[0]).to_frame().set_index(batch.index)
     predarray = pd.concat({'original':batch, 'predicted':predarray}, axis=1)
     Logger.log_params('---'*30)
     return predarray

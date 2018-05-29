@@ -27,6 +27,7 @@ def kerasLazy():
 class SkinApp(object):    
     ACT_TRAIN= '(T)rain'
     ACT_PRED = '(P)redict'
+    ACT_EVAL = '(E)valuate'
     ACT_LOAD = '(L)oad model'
     ACT_SAVE = '(S)ave model'
     ACT_DROP = '(D)rop model'
@@ -48,10 +49,11 @@ class SkinApp(object):
         self.modes = coll.OrderedDict()
         self.modes.update({self.ACT_TRAIN: {'1', 'train', 't'},})
         self.modes.update({self.ACT_PRED : {'2', 'predict', 'p'},})
-        self.modes.update({self.ACT_LOAD : {'3', 'load', 'l'},})
-        self.modes.update({self.ACT_SAVE : {'4', 'save', 's'},})
-        self.modes.update({self.ACT_DROP : {'5', 'drop', 'd'},})
-        self.modes.update({self.ACT_CONF : {'6', 'configure', 'c'},})
+        self.modes.update({self.ACT_EVAL : {'3', 'evaluate', 'e'},})
+        self.modes.update({self.ACT_LOAD : {'4', 'load', 'l'},})
+        self.modes.update({self.ACT_SAVE : {'5', 'save', 's'},})
+        self.modes.update({self.ACT_DROP : {'6', 'drop', 'd'},})
+        self.modes.update({self.ACT_CONF : {'7', 'configure', 'c'},})
         self.modes.update({self.ACT_QUIT : {'quit', 'q'},})
     
         self.modes.update({self.DBG_DATA : {'!', '-1'},})
@@ -86,7 +88,7 @@ class SkinApp(object):
         
         Reimport(geo) # drops the cache...
         catlabels, tries = [], 0
-        while len(catlabels) < len(cat_regexes):
+        while tries==0 and len(catlabels) < len(cat_regexes):
             tries += 1
             datagen, catlabels = geo.build_datastreams_gen(xml=xml, txt=txt, dir=dir, 
                                                            mode=mode, debug=False,
@@ -104,30 +106,54 @@ class SkinApp(object):
         import model_defs
         model_type = model_defs.variational_deep_AE
         
+        def evalfunc(models):
+            batch = next(sampled[0])
+            #SDutils.log_params(batch)
+            
+            #NORM
+            K = kerasLazy().backend
+            expression = batch.sort_index().T.values
+            print("UN-NORM: \n{}".format(expression))
+            expression, expr_mean, expr_var = SDutils.inp_batch_norm(expression)
+            print("POSTNORM: \n{}".format(expression))
+            #expression = K.eval(expression)
+            #ENDNORM
+            
+            metrics = models[self.config.get('usemodel')].test_on_batch([expression])
+            SDutils.log_params("Actual type: {}".format(str(batch.index.name)))
+            print(metrics)
+            #prediction = geo.parse_prediction(prediction, catlabels, batch=batch, raw_expr=expression, genes=genelabels)
+            return metrics
+
+        
         def predfunc(models):
             batch = next(sampled[0])
             #SDutils.log_params(batch)
             
             #NORM
             K = kerasLazy().backend
-            expression = K.variable(batch.sort_index().T.values)
+            expression = batch.sort_index().T.values
+            print("UN-NORM: \n{}".format(expression))
             expression, expr_mean, expr_var = SDutils.inp_batch_norm(expression)
-            expression = K.eval(expression)
+            print("POSTNORM: \n{}".format(expression))
+            #expression = K.eval(expression)
             #ENDNORM
             
-            prediction = models[self.config.get('which_model')].predict_on_batch([expression])
+            prediction = models[self.config.get('usemodel')].predict_on_batch([expression])
             SDutils.log_params("Actual type: {}".format(str(batch.index.name)))
-            prediction = geo.parse_prediction(prediction, catlabels, batch=batch, genes=genelabels)
+            prediction = geo.parse_prediction(prediction, catlabels, batch=batch, raw_expr=expression, genes=genelabels)
             return prediction
             
         def trainfunc(models, e=1):
             Callbacks = kerasLazy().callbacks
-            trained_model = models[self.config.get('which_model')]
+            trained_model = models[self.config.get('usemodel')]
             history = trained_model.fit_generator(model_type.batchgen(source=sampled[0], catlabels=catlabels, 
             
                                                   batch_size=self.config.get('batch_size', 5)),
                                                   steps_per_epoch=self.config.get('train_steps', 60), 
                                                   initial_epoch=e-1, epochs=e,
+                                                  
+                                                  #class_weight = {0: 1.0, 1: 0.5, 2: 1.0},
                                                   
                                                   callbacks=[
                                                             Callbacks.CSVLogger(filename='trainlog.csv', append=True),
@@ -144,6 +170,7 @@ class SkinApp(object):
             
         mode_func = {'test': lambda x, e: (predfunc(x)),
                      'train': lambda x, e: (trainfunc(x, e)),
+                     'eval': lambda x, e: (evalfunc(x)),
                     }.get(mode)
         
         built_models = [None for x in range(self.config.get('model_amt', 4))]
@@ -164,21 +191,21 @@ class SkinApp(object):
             if i==0: mdl.compile(
                                  optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
-                                 loss_weights={'diagnosis': 38, 'expression_out': 2,},
-                                 metrics={'diagnosis': ['categorical_accuracy']},
+                                 loss_weights={'diagnosis': 18, 'expression_out': 2,},
+                                 metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy']},
                                  )
             elif i==2: mdl.compile(
                                  optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
-                                 loss_weights={'diagnosis': 4, 'expression_out': 2,},
-                                 metrics={'diagnosis': ['categorical_accuracy']},
+                                 loss_weights={'diagnosis': 18, 'expression_out': 2,},
+                                 metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy']},
                                  )
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             
             return mdl
             
-        mdl_optimizer = kerasLazy().optimizers.Adam(amsgrad=True)
-        mdl_losses = {'default': 'mse'}
+        mdl_optimizer = kerasLazy().optimizers.Adam(lr=0.0001, amsgrad=True, decay=0.0)
+        mdl_losses = {'default': 'mape'}
         
         models =[print(i, models) or (models or [None for _ in range(i+1)])[i] 
                  or Compile(mdl=built_models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) 
@@ -222,7 +249,8 @@ class SkinApp(object):
                     except Exception: pass
                     
                     if mode == 'train': 
-                        for i,m in enumerate(models): m.save('{}.{}'.format(savepath, i))
+                        for i,m in enumerate(models): m.save('{}.{}'.format(savepath, i)) if i==0 else None
+                        
                     if mode == 'test': result.to_csv(savepath)
                     
             else: savepath = None if savepath is NotImplemented else savepath
@@ -345,10 +373,39 @@ class SkinApp(object):
                     print(prediction)
                     self.prediction = prediction
                     
+            if action in self.modes[self.ACT_EVAL]:
+                try: _tmp = self.run_model(*args, models=self.model,
+                                            dir=self.config.get('dir'), xml=self.config.get('xml'), txt=self.config.get('txt'), 
+                                            mode='eval', verbose=self.config.get('verbose'),
+                                            **kwargs
+                                           )
+                except Exception as Err: 
+                    sys.excepthook(*sys.exc_info())
+                    _tmp = None
+                
+                try: _tmpFN = _tmp[2]
+                except Exception as Err: _tmpFN = None
+                
+                try: eval_metrics = _tmp[1]
+                except Exception as Err: eval_metrics = None
+                
+                try: _tmp = _tmp[0]
+                except Exception as Err: _tmp = None
+                
+                model = _tmp if _tmp else self.model
+                modelpath = _tmpFN if (_tmp and _tmpFN) else (str(self.model) if _tmp else self.modelpath)
+                
+                if eval_metrics is not None: 
+                    print(eval_metrics)
+                    self.eval_metrics = eval_metrics
+                    
             if action in self.modes[self.ACT_LOAD]:
                 _tmp, _tmp2 = None, None
-                try: _tmp, _tmp2 = self.load_model(list_cwd=self.config.get('list_cwd', False))
-                except Exception as Err: pass
+                try: 
+                    import model_defs
+                    with kerasLazy().utils.CustomObjectScope({'VAE_loss': None}):
+                        _tmp, _tmp2 = self.load_model(list_cwd=self.config.get('list_cwd', False))
+                except Exception as Err: sys.excepthook(*sys.exc_info()) if self.config.get('verbose') else print(Err)
                 
                 if _tmp: 
                     model = list(self.model or [None for x in range(self.config.get('model_amt', 4))])
@@ -380,9 +437,10 @@ class SkinApp(object):
                 else: SDutils.log_params('Model not currenly loaded.')
                 
             if action in self.modes[self.ACT_DROP]:
-                self.model = None
-                self.modelpath = None
-                geo._key_cache = dict()
+                if self.get_input('Are you sure you want to drop the model?').lower() in {'y', 'yes'}:
+                    self.model = None
+                    self.modelpath = None
+                    geo._key_cache = dict()
                 
             if action in self.modes[self.ACT_CONF]:
                 while True:
@@ -466,3 +524,4 @@ if __name__ == '__main__':
     argparser.add_argument('-R', '--recompile', action='store_true')
     args = vars(argparser.parse_args())
     sys.exit(main(**args))
+

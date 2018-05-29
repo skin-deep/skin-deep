@@ -16,15 +16,14 @@ class MenuConfiguration(object):
                     (LABEL_SAMPLE_SIZE, None), 
                     
                     ('model_depth', 9), 
-                    ('compression_fac', 950),
+                    ('compression_fac', 920),
                     ('depth_scaling', 1.15),
-                    ('pre_compression', 1000),
                     
 
                     (SAVE_EVERY, 10),
                     (SAVE_TAILS, False),
                     
-                    ('which_model', 0),
+                    ('usemodel', 0),
                     ('list_cwd', False), 
                     ('drop_labels', False),
                 )
