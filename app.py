@@ -95,6 +95,7 @@ class SkinApp(object):
                                                            drop_labels=self.config.get('drop_labels', False),
                                                            category_regexes=cat_regexes, # ...but we're restoring/resetting it here (indirectly)
                                                            category_labels=label_mapping,
+                                                           validate_label=(mode in {'train',}),
                                                            )
             assert tries < 3
         sampled, genelabels, size = geo.sample_labels(datagen, self.config.get(config.LABEL_SAMPLE_SIZE))
@@ -113,13 +114,14 @@ class SkinApp(object):
             #NORM
             K = kerasLazy().backend
             expression = batch.sort_index().T.values
-            print("UN-NORM: \n{}".format(expression))
-            expression, expr_mean, expr_var = SDutils.inp_batch_norm(expression)
-            print("POSTNORM: \n{}".format(expression))
+            #print("UN-NORM: \n{}".format(expression))
+            #expression, expr_mean, expr_var = SDutils.inp_batch_norm(expression)
+            #print("POSTNORM: \n{}".format(expression))
+            
             #expression = K.eval(expression)
             #ENDNORM
             
-            metrics = models[self.config.get('usemodel')].test_on_batch([expression])
+            metrics = models[self.config.get('usemodel')].test_on_batch(expression, expression)
             SDutils.log_params("Actual type: {}".format(str(batch.index.name)))
             print(metrics)
             #prediction = geo.parse_prediction(prediction, catlabels, batch=batch, raw_expr=expression, genes=genelabels)
@@ -133,9 +135,11 @@ class SkinApp(object):
             #NORM
             K = kerasLazy().backend
             expression = batch.sort_index().T.values
-            print("UN-NORM: \n{}".format(expression))
-            expression, expr_mean, expr_var = SDutils.inp_batch_norm(expression)
-            print("POSTNORM: \n{}".format(expression))
+            
+            #print("UN-NORM: \n{}".format(expression))
+            #expression, expr_mean, expr_var = SDutils.inp_batch_norm(expression)
+            #print("POSTNORM: \n{}".format(expression))
+            
             #expression = K.eval(expression)
             #ENDNORM
             
@@ -153,7 +157,7 @@ class SkinApp(object):
                                                   steps_per_epoch=self.config.get('train_steps', 60), 
                                                   initial_epoch=e-1, epochs=e,
                                                   
-                                                  #class_weight = {0: 1.0, 1: 0.5, 2: 1.0},
+                                                  #class_weight = {0: 1.0, 1: 1.0, 2: 0.25, 2: 2.0},
                                                   
                                                   callbacks=[
                                                             Callbacks.CSVLogger(filename='trainlog.csv', append=True),
@@ -179,6 +183,7 @@ class SkinApp(object):
         if models is None or not all(models): 
             print(built_models)
             K = kerasLazy().backend
+            print(catlabels)
             built_models = self.build_models(datashape=size, kind=model_type, labels=K.eval(K.variable(np.array(tuple(catlabels.values())))),
                                             compression_fac=self.config.get('compression_fac', 1000),
                                             depth=self.config.get('model_depth', 4),
@@ -204,7 +209,7 @@ class SkinApp(object):
             
             return mdl
             
-        mdl_optimizer = kerasLazy().optimizers.Adam(lr=0.0001, amsgrad=True, decay=0.0)
+        mdl_optimizer = kerasLazy().optimizers.Adam(lr=0.00001, amsgrad=True, decay=0.0)
         mdl_losses = {'default': 'mape'}
         
         models =[print(i, models) or (models or [None for _ in range(i+1)])[i] 
@@ -403,23 +408,20 @@ class SkinApp(object):
                 _tmp, _tmp2 = None, None
                 try: 
                     import model_defs
-                    with kerasLazy().utils.CustomObjectScope({'VAE_loss': None}):
+                    with kerasLazy().utils.CustomObjectScope({'_VAElossFunc': None, 'VAE_loss': None}):
                         _tmp, _tmp2 = self.load_model(list_cwd=self.config.get('list_cwd', False))
-                except Exception as Err: sys.excepthook(*sys.exc_info()) if self.config.get('verbose') else print(Err)
+                        
+                except Exception as Err: 
+                    sys.excepthook(*sys.exc_info()) if self.config.get('verbose') else print(Err)
                 
                 if _tmp: 
                     model = list(self.model or [None for x in range(self.config.get('model_amt', 4))])
                     model[0] = _tmp
-                    
-                    for i, newmod in enumerate(model):
-                        # load weights from the main network to subnetworks, if built
-                        if i == 0: continue
-                        try: 
-                            if newmod is not None: newmod.set_weights(model[0].get_weights())
-                        except Exception as E: 
-                            sys.excepthook(*sys.exc_info())
                         
                     self.model = tuple(model)
+                    try: self.get_primary_weights(messy=False)
+                    except Exception as E: sys.excepthook(*sys.exc_info())
+                    
                     self.modelpath = str(_tmp2)
                     if self.config.get('verbose'): print(self.model[0].summary())
                     #self.config.options[config.LABEL_SAMPLE_SIZE] = self.model[0].input_shape[-1]
@@ -431,7 +433,7 @@ class SkinApp(object):
                     savepath = self.get_input("Enter the filename of file to save it to: ")
                     savepath = savepath.strip() if savepath else savepath
                     if savepath: 
-                        self.model[0].save(savepath)
+                        with kerasLazy().utils.CustomObjectScope({'_VAElossFunc': self.model[0].custom_loss}): self.model[0].save(savepath)
                         self.modelpath = savepath
                         SDutils.log_params('Model successfully saved to {}.'.format(savepath))
                 else: SDutils.log_params('Model not currenly loaded.')
@@ -507,6 +509,34 @@ class SkinApp(object):
             if action in self.modes[self.ACT_QUIT]:
                 mainloop = False
                 action = None
+    
+    def get_primary_weights(self, target_mdls=NotImplemented, messy=False):
+        if target_mdls is NotImplemented: target_mdls = self.model
+        if target_mdls and target_mdls[0]:
+            weightfname = 'primary.wgts'
+            target_mdls[0].save_weights(weightfname)
+            
+            for i, mod in enumerate(target_mdls[1:]):
+                try: mod.load_weights(weightfname, by_name=True) if mod else print('Model {} not built, skipping...'.format(i+1))
+                except Exception as E: sys.excepthook(*sys.exc_info())
+                else: self.config.get('verbose') and print('Loaded weights for model {}...'.format(i+1))
+            else: print('Weight loading complete.')
+                
+            if not messy:
+                try: os.remove(weightfname)
+                except Exception as E: sys.excepthook(*sys.exc_info())
+        else:
+            print('No model found!')
+            
+    def dump_predictors(self, to_fname=NotImplemented):
+        if to_fname is NotImplemented: to_fname = self.get_input('Enter filename for the weight file: ')
+        weights = pd.DataFrame(self.model[2].get_weights()[-1])
+        
+        try: weights = weights.set_index(prediction.index)
+        except Exception as E: pass
+        
+        if to_fname: weights.to_csv(to_fname, header=None)
+        return weights
     
 def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     app_instance = SkinApp(*args, verbose=verbose, xml=xml, txt=txt, dir=dir, **kwargs)

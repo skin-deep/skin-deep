@@ -8,9 +8,11 @@ import itertools as itt
 import re
 from importlib import reload
 
-import SDutils as Logger
+import SDutils
+Logger = SDutils
 
 DATA_COLNAME = 'Target'
+recoding_map={}
 
 def ask_for_files():
     files = set()
@@ -40,7 +42,7 @@ def parse_datasets(files=None, verbose=False, *args, **kwargs):
 def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args, **kwargs):
     if tags is None: tags = {'sample'}
     if junk_phrases is None: junk_phrases = {'{http://www.ncbi.nlm.nih.gov/geo/info/MINiML}',}
-    files = glob.glob(files) if files else files
+    files = glob.iglob(files) if files else files
     if not files:
         if verbose: files = ask_for_files()
         else: return list()
@@ -68,9 +70,12 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
                         print('')
                         if situation == 'B': return list()
                         if situation == 'S': verbose = False
-                        
+                #print(record)
                 all_records.append(record)
-            data.append(pd.DataFrame(all_records))
+            records_df = pd.DataFrame(all_records)
+            #records_df.name = filename
+            #print(records_df)
+            data.append(records_df)
     return data
 
 # Low-level, intra-dataset cleaning logic.
@@ -78,8 +83,8 @@ def clean_xmls(parsed_input, *args, **kwargs):
     cleaned = (x for x in parsed_input)
     cleaned = (fr.set_index('Accession') for fr in cleaned)
     cleaned = (get_patient_type(fr, keys=kwargs.get('category_regexes'), labels=kwargs.get('category_labels')) for fr in cleaned)
-    for clean_xml in cleaned:
-        yield clean_xml
+    for clean_xml in cleaned: yield clean_xml
+    return EOFError
         
 _key_cache = dict()
 def get_patient_type(dframe, keys=None, **kwargs):
@@ -108,20 +113,25 @@ def get_patient_type(dframe, keys=None, **kwargs):
 
     transformed = dframe.transform({'Title' : lambda x: ("/".join(keys.get(pat, 'ERROR') for pat in keys if re.search(pat, str(x), flags=re.I)) or str(x))})
     #transformed =  #filter out unlabelled?
-    print(transformed)
+    #print(transformed)
     return transformed
 
 def clean_data(raw_data):
     for datum in raw_data:
         cleaned = datum
         cleaned = cleaned.set_index(DATA_COLNAME)
+        cleaned = cleaned.sort_index()
+        #print("PRE-NORM CLEANED: ", cleaned)
+        #cleaned = cleaned.T.apply(SDutils.inp_batch_norm, axis=1, reduce=False).T
+        #print("POSTNORM CLEANED: ", cleaned)
         yield cleaned
 
 # Higher-level logic for integration
 def xml_pipeline(path=None, *args, **kwargs):
     raw_parse = parse_miniml(path or '*.xml', *args, **kwargs)
     cleaned = clean_xmls(raw_parse, *args, **kwargs)
-    return cleaned
+    for cln in cleaned: yield cln
+    return EOFError
    
 def txt_pipeline(path=None, *args, **kwargs):
     raw_data = parse_datasets(path or '*.txt', *args, **kwargs)
@@ -130,37 +140,45 @@ def txt_pipeline(path=None, *args, **kwargs):
     return raw_data #debugging purposes
     
 def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs):
-    xmls = xml_pipeline(path=xml_path, *args, **kwargs)
+    xmls = itt.cycle(xml_pipeline(path=xml_path, *args, **kwargs))
     #txts = txt_pipeline(path=txt_path, *args, **kwargs)
     count = 0
     import random
 
     for xml in xmls:
+        if random.random() < 0.1: continue
+        count = 0
         sample_groups = xml.groupby('Title').groups
         types = set(sample_groups.keys())
         pos = 0
+        #raise Exception(sample_groups)
         while types:
             batch = dict() #dict/set!
             ignored = set()
             for t in types:
                 if t in ignored: continue
                 try: 
+                    #print(t)
                     batch.update({t : sample_groups[t][pos]}) #in dict
                     count += 1
                 except IndexError as IE:
-                    ignored.update(t)
+                    #print(IE)
+                    ignored.update({t})
+                    #print(ignored)
             batchlen = len(batch)
             if not batchlen: break
             if batchlen > 1 and random.random() < 0.40: batch.popitem()
-            yield batch
+            if batch: yield batch
+            if count > 0 and random.random() < 0.1: break
             pos += 1
 
-    print("\nFound {} datafiles. \n".format(count))
-    if count < 1: raise FileNotFoundError
+        if count < 1: raise FileNotFoundError
+        print("\nFinished processing file {}.".format(xml))
+        print("Found {} datafiles.\n".format(count))
     #input("DEBUG: Continue?")
         
         
-
+import random
 def fetch_batch(stream, batch_size=10, aggregator=list, *args, **kwargs):
     """A generic buffer that reads and yields N values from a passed generator as an iterable.
     If the stream ends prematurely, returns however many elements could were read.
@@ -172,14 +190,21 @@ def fetch_batch(stream, batch_size=10, aggregator=list, *args, **kwargs):
     """
     bsize = batch_size
     batch = aggregator(*args, **kwargs)
-    while stream:
+    for incoming in stream:
+        #print(incoming)
+        #print('\n')
+        inc=incoming
         batch = aggregator(*args, **kwargs)
-        for _ in range(batch_size):
-            try: batch += aggregator((next(stream),))
+        for _ in range(bsize):
+            try:
+                #if kwargs.get('shuffle', True): inc = random.shuffle(inc)
+                batch += aggregator((inc,))
+                #print(batch)
             except StopIteration: 
                 stream = False
                 break
-        bsize = yield batch
+        new_bsize = yield batch
+        bsize = new_bsize or bsize
         
 def split_data(batches, test_to_train=0.2, shuffle=True):
     batches = itt.cycle(batches)
@@ -195,7 +220,7 @@ def split_data(batches, test_to_train=0.2, shuffle=True):
         batch_size = len(data)
         ratio = abs(test_to_train)
         ratio = ratio if ratio <= 1 else ratio / 100 # accept percentages as ints too
-        print("SPLIT RATIO: {}% TEST/TRAIN")
+        #print("SPLIT RATIO: {}% TEST/TRAIN".format(ratio))
         test_size = max(1, (batch_size * ratio) // 1)
 
         train, test = itt.chain({}), itt.chain({})
@@ -209,17 +234,6 @@ def split_data(batches, test_to_train=0.2, shuffle=True):
 
         yield train
         yield test
-        
-def build_datastreams_gen2(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
-    #dir = os.getcwd() if not dir else (dir if os.path.isabs(dir) else os.path.join(os.getcwd(), dir))
-    distype = kwargs.get('distype') or 'PP'
-    dir = r'D:\GitHub\skin-deep\!Partitioned\\' + distype
-    files = glob.iglob(os.path.join(dir, '*.csv'))
-    gen = (pd.DataFrame.from_csv(csvfile) for csvfile in files)
-    gen = (df.rename_axis(distype) for df in gen)
-    gen = itt.cycle(gen)
-    return [gen, gen]
-        
         
 def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwargs):
     DEBUG = kwargs.get('debug', False)
@@ -266,7 +280,18 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
     def nodrop_retrieve(pair):
         #print("NODROP CATS: ", categories)
         sample_lbl = str(pair[0]).upper()
-        try: categories.update({sample_lbl: categories.get(sample_lbl, (sample_lbl if sample_lbl in categories.values() else '<unknown>'))})
+        sample_lbl = recoding_map.get(sample_lbl, sample_lbl)
+        
+        if sample_lbl not in categories and kwargs.get('validate_label', False):
+            while sample_lbl not in categories:
+                print('COULD NOT PARSE {}!'.format(sample_lbl))
+                print('Available category codes: ')
+                print(categories)
+                newcoding = input('Please enter a valid category code: ').upper()
+                recoding_map[sample_lbl] = newcoding
+                sample_lbl = recoding_map.get(sample_lbl, sample_lbl)
+            
+        try: categories.update({sample_lbl: categories.get(sample_lbl, (sample_lbl if sample_lbl in categories.values() else 'INVALID CATEGORY'))})
         except ValueError: None if str(pair[0]).upper() in categories else sys.excepthook(*sys.exc_info())
         #finally: print("PAIR 1 IS: {}".format(pair[1]))
             
@@ -354,18 +379,24 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
     if batch is not None: print("SAMPLE: ", batch.columns.values[-1])
     print("PRED: \n", predarray)
     diagarray, topprob, diagnosis = np.array([predarray[-1][-1]]), -1., None
+    secondbest, secbest_lab = None, None
     if labels: Logger.log_params("PROBABILITIES: ")
     for (labl, onehot) in labels.items():
         try:
             guess = np.round(np.nanmax(onehot*diagarray)*100, 2)
             Logger.log_params("{LAB}: {PROB}%".format(LAB=labl, PROB=(guess or '<0.01')))
-            if guess > topprob: diagnosis, topprob = labl, guess
+            if guess > topprob: diagnosis, topprob, secondbest, secbest_lab = labl, guess, topprob, diagnosis
+            elif guess > secondbest: secondbest, secbest_lab = guess, labl
+                
         except Exception as _E: 
             print(labl, onehot)
             print('Could not parse the prediction properly - {};\nRaw prediction: \n{}'.format(_E, diagarray))
         #print(guess, topprob, diagnosis)
 
-    predarray = pd.Series(predarray[0].flatten(), name="{}=>({} @{}%)".format(batch.columns[0], diagnosis, np.round(topprob, 0))).to_frame()
+    pred_name = "{}=>({} @{}%".format(batch.columns[0], diagnosis, np.round(topprob, 0))
+    pred_name += "/{} @{}%)".format(secbest_lab, np.round(secondbest, 0)) if topprob <= 50 else ')'
+    
+    predarray = pd.Series(predarray[0].flatten(), name=pred_name).to_frame()
     
     genelabels = kwargs.get('genes')
     #diff = pd.Series(np.subtract(predarray.values, batch.values).flatten()).rename('diff for {}'.format(batch.columns.values[-1])).to_frame().set_index(genelabels)

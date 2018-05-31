@@ -16,7 +16,7 @@ class MenuConfiguration(object):
                     (LABEL_SAMPLE_SIZE, None), 
                     
                     ('model_depth', 9), 
-                    ('compression_fac', 920),
+                    ('compression_fac', 900),
                     ('depth_scaling', 1.15),
                     
 
