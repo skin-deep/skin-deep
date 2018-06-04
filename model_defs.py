@@ -320,6 +320,7 @@ class variational_deep_AE(labeled_AE):
             transformed = input_lay
             #transformed = cls.DLbackend.layers.BatchNormalization()(transformed)
             #transformed = cls.DLbackend.layers.AlphaDropout(0.15)(transformed)
+            #transformed = cls.DLbackend.layers.Softmax()(transformed)
             return transformed
 
     @classmethod
@@ -347,8 +348,7 @@ class variational_deep_AE(labeled_AE):
         preprocessed_inp = cls.input_preprocessing(last_lay, **kwargs)
         last_lay = preprocessed_inp
         
-        cust_layers = {
-                      }
+        cust_layers = {0: {'sizemult':1, 'activation': 'selu'}}
         
         for (i, siz) in enumerate(lay_sizes[:-1]):
             print(str(i)+':', siz or "NONE!")
@@ -374,12 +374,21 @@ class variational_deep_AE(labeled_AE):
                 encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal',
                                                           name='encoder_{}'.format(i)
                                                          )
-                #last_lay = cls.DLbackend.layers.AlphaDropout(0.2)(last_lay)
                 last_lay = encoder_node(last_lay)
+                
         else:
             # VAE stuff:
             enc_mean = cls.DLbackend.layers.Dense(latent_dims, name='encoded_mean'.format())(last_lay)
+            inp_mean = cls.DLbackend.layers.Input(shape=(latent_dims,),
+                                                  tensor=cls.DLbackend.backend.zeros(shape=(latent_dims,)) # makes this input optional
+                                                 )
+            enc_mean = cls.DLbackend.layers.add([enc_mean, inp_mean])
+            
             enc_logstdev = cls.DLbackend.layers.Dense(latent_dims, name='encoded_log-stdev'.format())(last_lay)
+            inp_logstdev = cls.DLbackend.layers.Input(shape=(latent_dims,), 
+                                                      tensor=cls.DLbackend.backend.ones(shape=(latent_dims,)) # makes this input optional
+                                                      )
+            enc_logstdev = cls.DLbackend.layers.multiply([enc_logstdev, inp_logstdev])
             
             def sampler(distribution_params):
                 mean, log_stddev = distribution_params
@@ -393,15 +402,13 @@ class variational_deep_AE(labeled_AE):
             enc_out_layer = latent_vector
             
         last_lay = enc_out_layer
-            
-        Encoder = cls.DLmodel(inbound, enc_mean, name='Encoder')
+        Encoder = cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[enc_mean, enc_logstdev], name='Encoder')
         
         # Decoder: compressed vals -> regression vals
         dec_start = None
         for (i, siz) in enumerate(reversed(lay_sizes[:-1])):
             #print(i, siz)
             decoder_node = cls.DLbackend.layers.Dense(int(siz), activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
-            #if i>0: last_lay = cls.DLbackend.layers.AlphaDropout(0.2)(last_lay)
             decoded = decoder_node(last_lay)
             last_lay = decoded
             dec_start = dec_start or decoder_node
@@ -416,15 +423,13 @@ class variational_deep_AE(labeled_AE):
                                                     )
         decoded = decoder_node(last_lay)
         
-        #dropout_decoded = cls.DLbackend.layers.AlphaDropout(0.1)(decoded)
         dec_start = dec_start or decoder_node
+        Decoder = cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[decoded], name='Decoder')
         
         # Diagnostician: vals -> class; functions as the adversarial component of the model
         
         diagger = cls.DLbackend.layers.Dense(4, activation='softmax', 
                                                 kernel_initializer='lecun_normal',
-                                                #kernel_regularizer=cls.DLbackend.regularizers.l1(0.01),
-                                                #activity_regularizer=cls.DLbackend.regularizers.l1(-1.0),
                                                 use_bias=False,
                                                 name='diagnosis')
                                                 
@@ -435,28 +440,11 @@ class variational_deep_AE(labeled_AE):
         # generated output diagnosis:
         diagnosis = diagger(decoded)
         
-        decoder_inp = cls.DLbackend.layers.Input(shape=(latent_dims,))
-            
-        Autoencoder = cls.DLmodel(inputs=[inbound], outputs=[decoded, corr_diagnosis, diagnosis], name='Autoencoder')
-        Decoder = cls.DLmodel(inputs=[inbound, decoder_inp], outputs=[decoded], name='Decoder')
-        Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[decoded, base_diagnosis], name='Diagnostician')
+        Diagnostician=cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[decoded, base_diagnosis], name='Diagnostician')        
+        #Diagnostician.custom_loss = VAE_loss(enc_mean, enc_logstdev, base_diagnosis, diagnosis)
         
-        def VAE_loss(inp, outp):
-            """Axis-wise KL-Div + loss-of-predictor penalty"""
-            import keras.backend as K
-            
-            # penalizes non-normal distribution of encodings in latent space
-            kl_loss = -0.5 * K.clip(K.sum(1 - K.square(enc_mean) + enc_logstdev - K.square(K.exp(enc_logstdev+K.epsilon())), axis=-1), -200000, -1)
-            
-            # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
-            import keras.losses as kL
-            reconstruction_loss = kL.categorical_crossentropy(K.epsilon()+base_diagnosis, K.epsilon()+diagnosis)
-            
-            total_loss = K.mean(reconstruction_loss + kl_loss)
-            return total_loss
-            
-        Autoencoder.custom_loss = VAE_loss
-        #Diagnostician.custom_loss = VAE_loss
+        Autoencoder = cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[decoded, corr_diagnosis, diagnosis], name='Autoencoder')
+        Autoencoder.custom_loss = VAE_loss(enc_mean, enc_logstdev, base_diagnosis, diagnosis)
 
         return Autoencoder, Encoder, Diagnostician, Decoder
         
@@ -481,9 +469,9 @@ class variational_deep_AE(labeled_AE):
                     raw_expr = K.get_value(expression)
                     xmax, xmin = raw_expr.max(), raw_expr.min()
 
-                    #expression, expr_mean, expr_var = SDutils.inp_batch_norm(raw_expr)
+                    expression, expr_mean, expr_var = SDutils.inp_batch_norm(raw_expr)
                     #print("BATCH XPR: ", expression)
-                    #expression = K.variable(expression)
+                    expression = K.variable(expression)
                     
                     diagnosis = K.variable(catlabels.get(str(x.index.name).upper(), [0.33, 0.33, 0.33]))
                     #print("\n", "EXPR: ", "\n", xmin, K.eval(expression).min(), "\n", xmax, K.eval(expression).max(), "\n", raw_expr, "\n", expression)
@@ -511,6 +499,22 @@ class variational_deep_AE(labeled_AE):
                 _size = new_size if new_size and new_size > 0 else _size
                 
         return batcher()
+    
+def VAE_loss(enc_mean, enc_logstdev, base_diagnosis, diagnosis, *args, **kwargs):
+    def _VAElossFunc(inp, outp):
+        """Axis-wise KL-Div + loss-of-predictor penalty"""
+        import keras.backend as K
+        
+        # penalizes non-normal distribution of encodings in latent space
+        kl_loss = -0.5 * K.clip(K.sum(1 - K.square(enc_mean) + enc_logstdev - K.square(K.exp(enc_logstdev+K.epsilon())), axis=-1), -200000, -K.epsilon())
+        
+        # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
+        import keras.losses as kL
+        reconstruction_loss = kL.categorical_crossentropy(K.epsilon()+base_diagnosis, K.epsilon()+diagnosis)
+        
+        total_loss = K.mean(reconstruction_loss + kl_loss)
+        return total_loss
+    return _VAElossFunc
     
 def build_models(datashape, which='VAE', activators=None, **kwargs):
     if not activators: activators = {'deep': 'selu', 'regression': 'linear', 'classification': 'softmax'}

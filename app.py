@@ -98,6 +98,7 @@ class SkinApp(object):
                                                            validate_label=(mode in {'train',}),
                                                            )
             assert tries < 3
+        #genelabels = labels of next TODO
         sampled, genelabels, size = geo.sample_labels(datagen, self.config.get(config.LABEL_SAMPLE_SIZE))
         
         # Ugly debug hacks:
@@ -121,10 +122,9 @@ class SkinApp(object):
             #expression = K.eval(expression)
             #ENDNORM
             
-            metrics = models[self.config.get('usemodel')].test_on_batch(expression, expression)
+            metrics = models[self.config.get('usemodel')].test_on_batch([expression, expression])
             SDutils.log_params("Actual type: {}".format(str(batch.index.name)))
             print(metrics)
-            #prediction = geo.parse_prediction(prediction, catlabels, batch=batch, raw_expr=expression, genes=genelabels)
             return metrics
 
         
@@ -196,20 +196,20 @@ class SkinApp(object):
             if i==0: mdl.compile(
                                  optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
-                                 loss_weights={'diagnosis': 18, 'expression_out': 2,},
+                                 loss_weights={'diagnosis': 8, 'expression_out': 2,},
                                  metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy']},
                                  )
             elif i==2: mdl.compile(
                                  optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
-                                 loss_weights={'diagnosis': 18, 'expression_out': 2,},
+                                 loss_weights={'diagnosis': 6, 'expression_out': 2,},
                                  metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy']},
                                  )
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             
             return mdl
             
-        mdl_optimizer = kerasLazy().optimizers.Adam(lr=0.00001, amsgrad=True, decay=0.0)
+        mdl_optimizer = kerasLazy().optimizers.RMSprop(lr=0.000003)#Adam(lr=0.000003, amsgrad=True)
         mdl_losses = {'default': 'mape'}
         
         models =[print(i, models) or (models or [None for _ in range(i+1)])[i] 
@@ -439,18 +439,19 @@ class SkinApp(object):
                 else: SDutils.log_params('Model not currenly loaded.')
                 
             if action in self.modes[self.ACT_DROP]:
-                if self.get_input('Are you sure you want to drop the model?').lower() in {'y', 'yes'}:
+                if self.get_input('Are you sure you want to drop the model? ').lower() in {'y', 'yes'}:
                     self.model = None
                     self.modelpath = None
                     geo._key_cache = dict()
                 
             if action in self.modes[self.ACT_CONF]:
                 while True:
-                    optstrings = [(repr(Opt), repr(Val)) for Opt, Val in self.config.options.items()]
+                    blacklist = {'category_regexes',}
+                    optstrings = [(repr(Opt), repr(Val)) for Opt, Val in self.config.options.items() if Opt not in blacklist]
                     leftspace = "{f1}{space}{f2}".format(f1="{O:<", space=max(map(len, (x[0] for x in optstrings))), f2="}")
                     rightspace = "{f1}{space}{f2}".format(f1="{V:>", space=max(map(len, (x[1] for x in optstrings))), f2="}")
                     lines = ["    > o {lsp}{sep:^3}{rsp} <".format(lsp=leftspace, rsp=rightspace, sep=' - ').format(O=repr(Opt), V=repr(Val)) 
-                                                                      for Opt, Val in self.config.options.items()]
+                                                                      for Opt, Val in self.config.options.items() if Opt not in blacklist]
                     menusize = max(map(len, lines))
                     print(" ")
                     print("    >>> {siz} <<<"
@@ -528,15 +529,17 @@ class SkinApp(object):
         else:
             print('No model found!')
             
-    def dump_predictors(self, to_fname=NotImplemented):
-        if to_fname is NotImplemented: to_fname = self.get_input('Enter filename for the weight file: ')
-        weights = pd.DataFrame(self.model[2].get_weights()[-1])
+    def predictor_dump(self, fname=NotImplemented, model_ind=2):
+        if fname is NotImplemented: fname = 'preddump.csv'
+        predwgts = self.model[model_ind].get_weights()[-1]
+        predwgts = pd.DataFrame(predwgts)
+        try: predwgts = predwgts.set_index(self.prediction.index)
+        except Exception as E: print('Could not set indices!')
+        if fname: predwgts.to_csv(fname, index_label='Gene', )
+        return predwgts
         
-        try: weights = weights.set_index(prediction.index)
-        except Exception as E: pass
-        
-        if to_fname: weights.to_csv(to_fname, header=None)
-        return weights
+    dump_predictors = preddump = predictor_dump #aliases
+    
     
 def main(verbose=None, *args, xml=None, txt=None, dir=None, **kwargs):
     app_instance = SkinApp(*args, verbose=verbose, xml=xml, txt=txt, dir=dir, **kwargs)

@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 import itertools as itt
 import re
 from importlib import reload
+import random
 
 import SDutils
 Logger = SDutils
@@ -72,6 +73,7 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
                         if situation == 'S': verbose = False
                 #print(record)
                 all_records.append(record)
+            random.shuffle(all_records)
             records_df = pd.DataFrame(all_records)
             #records_df.name = filename
             #print(records_df)
@@ -104,6 +106,7 @@ def get_patient_type(dframe, keys=None, **kwargs):
             kwargs.get('labels')
             or label_dicts.default
             )
+    #print("LABELS FROM DICT: {}".format(labels))
     labels = {str(k).upper(): v for k,v in labels.items()} # standardize keys
     #print("KS1!: ", keys)
     keys = {str(k).upper(): labels.get(str(k).upper(), str(k).upper()) for k in keys}
@@ -111,7 +114,7 @@ def get_patient_type(dframe, keys=None, **kwargs):
     _key_cache['Cached-1'] = keys
     Logger.log_params("CACHE: " + str(_key_cache))
 
-    transformed = dframe.transform({'Title' : lambda x: ("/".join(keys.get(pat, 'ERROR') for pat in keys if re.search(pat, str(x), flags=re.I)) or str(x))})
+    transformed = dframe.transform({'Title' : lambda x: ("/".join([keys.get(pat, 'ERROR') for pat in keys if re.search(pat, str(x), flags=re.I)][:1]) or str(x))})
     #transformed =  #filter out unlabelled?
     #print(transformed)
     return transformed
@@ -143,7 +146,6 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
     xmls = itt.cycle(xml_pipeline(path=xml_path, *args, **kwargs))
     #txts = txt_pipeline(path=txt_path, *args, **kwargs)
     count = 0
-    import random
 
     for xml in xmls:
         if random.random() < 0.1: continue
@@ -167,9 +169,9 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
                     #print(ignored)
             batchlen = len(batch)
             if not batchlen: break
-            if batchlen > 1 and random.random() < 0.40: batch.popitem()
+            if batchlen > 1 and random.random() < 0.30: batch.popitem()
             if batch: yield batch
-            if count > 0 and random.random() < 0.1: break
+            if count > 0 and random.random() < 0.1: continue
             pos += 1
 
         if count < 1: raise FileNotFoundError
@@ -206,7 +208,7 @@ def fetch_batch(stream, batch_size=10, aggregator=list, *args, **kwargs):
         new_bsize = yield batch
         bsize = new_bsize or bsize
         
-def split_data(batches, test_to_train=0.2, shuffle=True):
+def split_data(batches, test_to_train=0.4, shuffle=True):
     batches = itt.cycle(batches)
     for raw_data in batches:
         if not raw_data: continue
@@ -226,7 +228,7 @@ def split_data(batches, test_to_train=0.2, shuffle=True):
         train, test = itt.chain({}), itt.chain({})
         if batch_size > 1:
             # we know there's at least one element from an earlier check
-            for i,x in enumerate(data[1::2]):
+            for i,x in enumerate(data[1::1]):
                 # alternating split to be on the safe side
                 if i < test_size: test = itt.chain(test, [x])
                 else: train = itt.chain(train, [x])
@@ -280,6 +282,7 @@ def build_datastreams_gen(xml=None, txt=None, dir=None, drop_labels=False, **kwa
     def nodrop_retrieve(pair):
         #print("NODROP CATS: ", categories)
         sample_lbl = str(pair[0]).upper()
+        if not sample_lbl: sample_lbl = print('WARNING: defaulting to NN for empty label!') and 'NN'
         sample_lbl = recoding_map.get(sample_lbl, sample_lbl)
         
         if sample_lbl not in categories and kwargs.get('validate_label', False):
@@ -390,7 +393,7 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
                 
         except Exception as _E: 
             print(labl, onehot)
-            print('Could not parse the prediction properly - {};\nRaw prediction: \n{}'.format(_E, diagarray))
+            #print('Could not parse the prediction properly - {};\nRaw prediction: \n{}'.format(_E, diagarray))
         #print(guess, topprob, diagnosis)
 
     pred_name = "{}=>({} @{}%".format(batch.columns[0], diagnosis, np.round(topprob, 0))
@@ -404,7 +407,9 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
     
     #import keras.backend as K
     #batch = batch.apply(lambda BT: K.eval(K.transpose(Logger.inp_batch_norm(K.variable([BT.values]))[0])), axis=1)
-    if genelabels is not None: predarray = predarray.set_index(genelabels)
+    if genelabels is not None: 
+        try: predarray = predarray.set_index(genelabels)
+        except ValueError as VE: return predarray
     print("PROCESSED: \n\n", raw_expr)
     if raw_expr is not None: batch = pd.Series(raw_expr[-1], name=batch.columns[0]).to_frame().set_index(batch.index)
     predarray = pd.concat({'original':batch, 'predicted':predarray}, axis=1)

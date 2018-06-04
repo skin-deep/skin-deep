@@ -9,14 +9,15 @@ which_model = 0 # TEMPORARY VAR, REMOVE ME!
 
 class MenuConfiguration(object):
     options = coll.OrderedDict()
+    import label_dicts
     defaults =  (
                     ('train_steps', 30), 
                     ('test_steps', 10), 
-                    ('batch_size', 10),
+                    ('batch_size', 30),
                     (LABEL_SAMPLE_SIZE, None), 
                     
-                    ('model_depth', 9), 
-                    ('compression_fac', 900),
+                    ('model_depth', 14), 
+                    ('compression_fac', 1700),
                     ('depth_scaling', 1.15),
                     
 
@@ -26,6 +27,7 @@ class MenuConfiguration(object):
                     ('usemodel', 0),
                     ('list_cwd', False), 
                     ('drop_labels', False),
+                    ('category_regexes', list(label_dicts.default.keys())),
                 )
 
     def __init__(self, opts=None, **kwargs):
