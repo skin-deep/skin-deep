@@ -48,4 +48,28 @@ fourclass  = {
             'AAB-.*?-Normal':'NN', 'AAB-.*?-NL':'NN', 'AAB-.*?-L':'IN', 
           }
           
+pepe  = {
+            #'_PP_':'PP', '_PP_':'PP', '_NN_':'NN',
+            '_PP':'PP', '_PP':'PP', '_NN':'NN',
+            'Severe':'PP', 'Mild':'PP', 'Normal':'NN', 
+            'Control':'NN', 'Involved':'PP', 
+            #'Uninvolved':'PP', 'Lesion':'PP', 
+            '_Lesional':'PP', '_Non-lesional':'PP', 
+            #'NL':'PP', 
+            #'\bNL':'PP', 
+            '_NL':'PP',
+            #'LS':'PP', 
+            #'\bLS':'PP', 
+            '_LS':'PP',
+            'acne.lesion':'IN', 'acne.non':'NN',
+            #'allergic':'IN', 'controlsubject':'NN',
+            #'Day':'IN', 'Week': 'PP',
+            'Brain':'NN', 'Blood': 'NN', 
+            #'cell line':'NN', 
+            'cell': 'NN',
+            #'wound':'NN',
+            #'sun-protected':'NN', 'sun-exposed':'NN',
+            'AAB-.*?-Normal':'NN', 'AAB-.*?-NL':'NN', 'AAB-.*?-L':'IN', 
+          }
+          
 default = fourclass

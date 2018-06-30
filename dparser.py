@@ -52,6 +52,7 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
         xml_data = None
         with open(filename) as xml_file: xml_data = xml_file.read()
         if xml_data:
+            print("\n\nProcessing {}...\n\n".format(filename))
             root = ET.XML(xml_data)
             all_records = []
             if verbose: verbose = True if 'n' == input('Mute ([Y]/n): ').lower().strip() else False
@@ -72,6 +73,7 @@ def parse_miniml(files=None, tags=None, junk_phrases=None, verbose=False, *args,
                         if situation == 'B': return list()
                         if situation == 'S': verbose = False
                 #print(record)
+                #if random.random() <= 0.8: all_records.append(record)
                 all_records.append(record)
             random.shuffle(all_records)
             records_df = pd.DataFrame(all_records)
@@ -181,7 +183,7 @@ def combo_pipeline(xml_path=None, txt_path=None, verbose=False, *args, **kwargs)
         
         
 import random
-def fetch_batch(stream, batch_size=10, aggregator=list, *args, **kwargs):
+def fetch_batch(stream, batch_size=3, aggregator=list, *args, **kwargs):
     """A generic buffer that reads and yields N values from a passed generator as an iterable.
     If the stream ends prematurely, returns however many elements could were read.
     
@@ -209,7 +211,7 @@ def fetch_batch(stream, batch_size=10, aggregator=list, *args, **kwargs):
         bsize = new_bsize or bsize
         
 def split_data(batches, test_to_train=0.4, shuffle=True):
-    batches = itt.cycle(batches)
+    #batches = itt.cycle(batches)
     for raw_data in batches:
         if not raw_data: continue
         data = raw_data.copy()
@@ -228,11 +230,11 @@ def split_data(batches, test_to_train=0.4, shuffle=True):
         train, test = itt.chain({}), itt.chain({})
         if batch_size > 1:
             # we know there's at least one element from an earlier check
-            for i,x in enumerate(data[1::1]):
+            for i,x in enumerate(data[1::2]):
                 # alternating split to be on the safe side
                 if i < test_size: test = itt.chain(test, [x])
                 else: train = itt.chain(train, [x])
-            train = itt.chain(train, itt.islice(data, 0, None, 2))
+            train = itt.chain(train, itt.islice(data, 0, None, 1))
 
         yield train
         yield test
@@ -361,28 +363,81 @@ def sample_labels(generators, samplesize=None, offset=0, *args, **kwargs):
         #print(nxt)
         size = nxt.size # sample the data for size
         samplesize = samplesize or size # None input - do not subsample
-        safe_size = min(size, samplesize)
+        #safe_size = min(size, samplesize)
         nxt = nxt#[0+(safe_size*offset):(safe_size*(offset+1))] if size <= (1+offset)*safe_size else nxt ##nxt.sample(safe_size)
         safe_size = nxt.T.shape
-        out_generators[i] = itt.chain((nxt,), generators[i]) # return the sampled column for processing
-        #import random
+        #out_generators[i] = itt.chain((nxt,), generators[i]) # return the sampled column for processing
         #out_generators[i] = itt.islice(generators[i], 0, None, random.choice(list(range(1,4)))) # Debug; skips steps to ensure the model generalizes outside the training sequence
         labels = nxt.index.values
     
         if kwargs.get('verbose', True): print('LABELS PICKED: ', labels, '\n')
     
-    return out_generators, labels, safe_size
+    return generators, labels, safe_size
+
+import matplotlib.pyplot as plt
+try:
+    import seaborn as sbn
+except ImportError: 
+    print('Seaborn not found, using default MPL.')
+
+dotcount = 0
+targettype = None
+othercolor = 'C0'
+dotmarker = 'o'
+if True:
+    dotsplot = plt.gca()
+    try: known_pltlabels = known_pltlabels
+    except Exception as E: raise E#known_pltlabels = set()
+    colors = {'PP':'xkcd:magenta', 'PN':'xkcd:goldenrod', 'NN':'xkcd:navy', 'IN':'xkcd:salmon'} # validation
+else:
+    plt.close('all')
+    dotsplot = plt.axes()
+    dotsplot.axhline(0, ls='--', alpha=0.5)
+    dotsplot.axvline(0, ls='--', alpha=0.5)
+    known_pltlabels = set()
+    colors = {'PP':'xkcd:crimson', 'PN':'xkcd:yellowgreen', 'NN':'xkcd:azure', 'IN':'xkcd:orangered'} # base
 
 def parse_prediction(predarray, labels=None, *args, **kwargs):
     labels = labels or {}
     batch = kwargs.get('batch')
+    sample_type = kwargs.get('sample_type')
     raw_expr = kwargs.get('raw_expr')
     #Logger.log_params("RAW: \n{}".format(predarray))
     #if batch is not None: print("BATCH: \n", batch)
-    if batch is not None: print("SAMPLE: ", batch.columns.values[-1])
+    #if batch is not None: print("SAMPLE: ", batch.columns.values[-1])
+    
     print("PRED: \n", predarray)
     diagarray, topprob, diagnosis = np.array([predarray[-1][-1]]), -1., None
     secondbest, secbest_lab = None, None
+    
+    # horrible kludge for encoding to avoid refactoring for now!
+    #print('USEMODEL: ', kwargs.get('usemodel'))
+    if kwargs.get('usemodel', float('nan')) == 1:
+        mean, std = pd.Series(predarray[0][-1]).to_frame(), pd.Series(predarray[1][-1]).to_frame()
+        mean, std = mean.rename(columns={0:'mean ({type})'.format(type=sample_type)}), std.rename(columns={0:'std ({type})'.format(type=sample_type)}),
+        
+        global dotsplot, dotcount, colors, targettype, othercolor, dotmarker
+        targ_col = othercolor
+        print("Dot {}".format(dotcount+1))
+        targ_type = targettype
+        for ckey, ccol in colors.items():
+            if '({})'.format(ckey) in sample_type: 
+                targ_type = ckey
+                targ_col = ccol
+                break
+        scatterargs = dict(x=0, y=1, s=5+5*np.exp(std.T.values), ax=dotsplot, 
+                                        c=targ_col, 
+                                        alpha=0.5,
+                                        marker=dotmarker,
+                                        #edgecolors='C4',
+                                      )
+        targettype = targettype or targ_type or input('Enter legend item name: ')
+        if targ_type not in known_pltlabels: scatterargs.update({'label' : targ_type}) or known_pltlabels.update([targ_type]) # OR for terseness
+        elif 'label' in scatterargs and targ_type in known_pltlabels: scatterargs.pop('label')
+        dotsplot = mean.T.plot.scatter(**scatterargs)
+        dotcount = dotcount + 1
+        return mean.join(std)
+    
     if labels: Logger.log_params("PROBABILITIES: ")
     for (labl, onehot) in labels.items():
         try:
@@ -392,11 +447,11 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
             elif guess > secondbest: secondbest, secbest_lab = guess, labl
                 
         except Exception as _E: 
-            print(labl, onehot)
+            if kwargs.get('verbose'): print(labl, onehot)
             #print('Could not parse the prediction properly - {};\nRaw prediction: \n{}'.format(_E, diagarray))
         #print(guess, topprob, diagnosis)
 
-    pred_name = "{}=>({} @{}%".format(batch.columns[0], diagnosis, np.round(topprob, 0))
+    pred_name = "{}=>({} @{}%".format(sample_type, diagnosis, np.round(topprob, 0))
     pred_name += "/{} @{}%)".format(secbest_lab, np.round(secondbest, 0)) if topprob <= 50 else ')'
     
     predarray = pd.Series(predarray[0].flatten(), name=pred_name).to_frame()
@@ -411,7 +466,7 @@ def parse_prediction(predarray, labels=None, *args, **kwargs):
         try: predarray = predarray.set_index(genelabels)
         except ValueError as VE: return predarray
     print("PROCESSED: \n\n", raw_expr)
-    if raw_expr is not None: batch = pd.Series(raw_expr[-1], name=batch.columns[0]).to_frame().set_index(batch.index)
+    if raw_expr is not None: batch = pd.Series(raw_expr[-1], name=sample_type).to_frame().set_index(genelabels)
     predarray = pd.concat({'original':batch, 'predicted':predarray}, axis=1)
     Logger.log_params('---'*30)
     return predarray

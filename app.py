@@ -24,6 +24,8 @@ def kerasLazy():
         Keras = k
     return Keras
 
+def top_2_accuracy(y_true, y_pred): return kerasLazy().metrics.top_k_categorical_accuracy(y_true, y_pred, k=2)
+    
 class SkinApp(object):    
     ACT_TRAIN= '(T)rain'
     ACT_PRED = '(P)redict'
@@ -106,54 +108,63 @@ class SkinApp(object):
         global _encoding
         _encoding = catlabels # TEMPORARY, MEMOs THE LABELS
         import model_defs
+        Reimport(model_defs)
         model_type = model_defs.variational_deep_AE
         
+        batch_stream = model_type.batchgen(
+                                             source=sampled[0], 
+                                             catlabels=catlabels, 
+                                             batch_size=self.config.get('batch_size', 1),
+                                             with_name=True,
+                                            )
         def evalfunc(models):
-            batch = next(sampled[0])
-            #SDutils.log_params(batch)
+            batch, batchnames = next(batch_stream)
+            zipped_inps= {i: {key : np.array([batch[0][key][i-1]]) for key in batch[0].keys()} for i in range(len(batch[0].values()))}
+            zipped_inps = {0: zipped_inps[0]} # temporary
+            predicted = tuple([zipped_inps[k] for k in sorted(zipped_inps.keys())])
+                                            
+            zipped_targ = {i: {key : np.array([batch[1][key][i-1]]) for key in batch[1].keys()} for i in range(len(batch[1].values()))}
+            zipped_targ = {0: zipped_targ[0]} # temporary
+            target = tuple([zipped_targ[k] for k in sorted(zipped_targ.keys())])
             
-            #NORM
-            K = kerasLazy().backend
-            expression = batch.sort_index().T.values
-            #print("UN-NORM: \n{}".format(expression))
-            #expression, expr_mean, expr_var = SDutils.inp_batch_norm(expression)
-            #print("POSTNORM: \n{}".format(expression))
+            ac_types = {i: batchnames[i] for i in zipped_inps.keys()}
+            type_names = tuple([ac_types[k] for k in sorted(ac_types.keys())])
             
-            #expression = K.eval(expression)
-            #ENDNORM
+            used_model = models[self.config.get('usemodel')]
+            metrics = used_model.test_on_batch(predicted[-1], target[-1])
             
-            metrics = models[self.config.get('usemodel')].test_on_batch([expression, expression])
-            SDutils.log_params("Actual type: {}".format(str(batch.index.name)))
+            metrics = pd.DataFrame(data=metrics, index=used_model.metrics_names, columns=type_names)
             print(metrics)
+            
             return metrics
 
         
         def predfunc(models):
-            batch = next(sampled[0])
-            #SDutils.log_params(batch)
+            batch, batchnames = next(batch_stream)
+                                            
+                                            
+            zipped = {i: {key : np.array([batch[0][key][i:(i+1)]][-1]) for key in batch[0].keys()} for i in range(len(batch[0].values()))}
+            zipped = {0: zipped[0]} # temporary
+            ac_types = {i: batchnames[i] for i in zipped.keys()}
             
-            #NORM
-            K = kerasLazy().backend
-            expression = batch.sort_index().T.values
             
-            #print("UN-NORM: \n{}".format(expression))
-            #expression, expr_mean, expr_var = SDutils.inp_batch_norm(expression)
-            #print("POSTNORM: \n{}".format(expression))
-            
-            #expression = K.eval(expression)
-            #ENDNORM
-            
-            prediction = models[self.config.get('usemodel')].predict_on_batch([expression])
-            SDutils.log_params("Actual type: {}".format(str(batch.index.name)))
-            prediction = geo.parse_prediction(prediction, catlabels, batch=batch, raw_expr=expression, genes=genelabels)
+            target = tuple(zipped.values())
+            print("PREDTARGET: \n", target)
+            prediction = models[self.config.get('usemodel')].predict_on_batch(target[-1])
+            SDutils.log_params("Actual types: {}".format(ac_types))
+            prediction = geo.parse_prediction(prediction, catlabels, sample_type=ac_types[0], raw_expr=zipped[0]['expression_in'], genes=genelabels, usemodel=self.config.get('usemodel'))
             return prediction
             
         def trainfunc(models, e=1):
             Callbacks = kerasLazy().callbacks
             trained_model = models[self.config.get('usemodel')]
-            history = trained_model.fit_generator(model_type.batchgen(source=sampled[0], catlabels=catlabels, 
-            
-                                                  batch_size=self.config.get('batch_size', 5)),
+            history = trained_model.fit_generator(
+                                                  model_type.batchgen(
+                                                                      source=sampled[0], 
+                                                                      catlabels=catlabels, 
+                                                                      batch_size=self.config.get('batch_size', 5)
+                                                                      ),
+                                                                  
                                                   steps_per_epoch=self.config.get('train_steps', 60), 
                                                   initial_epoch=e-1, epochs=e,
                                                   
@@ -192,28 +203,29 @@ class SkinApp(object):
         
         def Compile(mdl, i=1, *args, **kwargs): 
             SDutils.log_params("DEBUG: Compile kwargs for submodel {no} ({mod}): \n".format(no=i, mod=mdl) + str(kwargs))
-            def merge_losses(*losses): return kerasLazy().backend.mean(kerasLazy().backend.sum(*[l() for l in losses]))         
+            #def merge_losses(*losses): return kerasLazy().backend.mean(kerasLazy().backend.sum(*[l() for l in losses]))
             if i==0: mdl.compile(
                                  optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
                                  loss_weights={'diagnosis': 8, 'expression_out': 2,},
-                                 metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy']},
+                                 metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy', top_2_accuracy]},
                                  )
             elif i==2: mdl.compile(
                                  optimizer=kwargs.get('optimizer'), 
                                  loss={'diagnosis': 'categorical_crossentropy', 'expression_out': getattr(mdl, 'custom_loss', kwargs.get('loss'))},
                                  loss_weights={'diagnosis': 6, 'expression_out': 2,},
-                                 metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy']},
+                                 metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy', top_2_accuracy]},
                                  )
             else: mdl.compile(optimizer=kwargs.get('optimizer'), loss=kwargs.get('loss'))
             
             return mdl
             
-        mdl_optimizer = kerasLazy().optimizers.RMSprop(lr=0.000003)#Adam(lr=0.000003, amsgrad=True)
+        mdl_optimizer = kerasLazy().optimizers.RMSprop(lr=0.000003, decay=0.1)
         mdl_losses = {'default': 'mape'}
         
         models =[print(i, models) or (models or [None for _ in range(i+1)])[i] 
-                 or Compile(mdl=built_models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) 
+                 #or Compile(mdl=built_models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) 
+                or built_models[i]
                 for (i,x) in enumerate(built_models)]
         if kwargs.get('recompile', False): models = [Compile(mdl=models[i], i=i, optimizer=mdl_optimizer, loss=mdl_losses.get(i, mdl_losses['default'])) for (i,x) in enumerate(models)]
         
@@ -297,10 +309,28 @@ class SkinApp(object):
                     model_path = NotImplemented
         else:
             try:
-                model = kerasLazy().models.load_model(model_path)
+                loadmode = self.config.get('weight_loading', 'weights')
+                
+                if loadmode in {0, 'model'}:
+                    with kerasLazy().utils.CustomObjectScope({'_VAElossFunc': None, 'VAE_loss': None, 'top_2_accuracy': top_2_accuracy}):
+                        model = kerasLazy().models.load_model(model_path)
+                        
+                elif loadmode in {1, 'weights'}:
+                    if not self.model or None in self.model:
+                        K = kerasLazy().backend
+                        self.model = self.build_models(datashape=(54675), labels=K.eval(K.variable(np.array(tuple(self.config.get('label_mapping', {}).keys())))),
+                                            compression_fac=self.config.get('compression_fac', 1000),
+                                            depth=self.config.get('model_depth', 4),
+                                            activators=self.config.get('activators'),
+                                            )
+                    model = self.model[0]
+                    model.load_weights(model_path)
+                    self.get_primary_weights()
+                    
                 loaded_path = model_path
             except Exception as Err:
                 if kwargs.get('verbose'): sys.excepthook(*sys.exc_info())
+                else: print(Err)
                 SDutils.log_params("\n\nModel could not be loaded from path {}!".format(loaded_path))
             return model, loaded_path
             
@@ -406,6 +436,7 @@ class SkinApp(object):
                     
             if action in self.modes[self.ACT_LOAD]:
                 _tmp, _tmp2 = None, None
+                
                 try: 
                     import model_defs
                     with kerasLazy().utils.CustomObjectScope({'_VAElossFunc': None, 'VAE_loss': None}):
@@ -535,6 +566,8 @@ class SkinApp(object):
         predwgts = pd.DataFrame(predwgts)
         try: predwgts = predwgts.set_index(self.prediction.index)
         except Exception as E: print('Could not set indices!')
+        try: predwgts = predwgts.rename(columns={'0':'IN', '1':'NN', '2':'PN', '3':'PP'})
+        except Exception as E: print('Could not set column names!')
         if fname: predwgts.to_csv(fname, index_label='Gene', )
         return predwgts
         

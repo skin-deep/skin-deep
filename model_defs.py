@@ -6,8 +6,8 @@ import SDutils
 
 class ExpressionModel(object):
     """Container for ML models."""
-    import keras as DLbackend
-    DLmodel = DLbackend.models.Model
+    import keras
+    DLmodel = keras.models.Model
     
     #import keras.backend.tensorflow_backend as ktf
     #def get_session(gpu_fraction=0.333):
@@ -102,35 +102,35 @@ class deep_AE(ExpressionModel):
         print(lay_sizes)
 
         # layers
-        inbound = cls.DLbackend.layers.Input(shape=(datashape or [datashape[0]]))
+        inbound = keras.layers.Input(shape=(datashape or [datashape[0]]))
         last_lay = inbound
         
         last_lay = cls.input_preprocessing(last_lay, **kwargs)
         
         for (i, siz) in enumerate(lay_sizes): #[0]th is already built
             print(siz or "NONE!")
-            encoded = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i))(last_lay)
+            encoded = keras.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i))(last_lay)
             last_lay = encoded
         Encoder = cls.DLmodel(inbound, encoded, name='Encoder')
         
-        representation = cls.DLbackend.layers.Input(Encoder.layers[-1].output_shape[1:])
+        representation = keras.layers.Input(Encoder.layers[-1].output_shape[1:])
         
         dec_start = None
         for (i, siz) in enumerate(reversed(lay_sizes[:-1])):
             print(i, siz)
-            decfunc = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
+            decfunc = keras.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
             decoded = decfunc(last_lay)
             last_lay = decoded
             dec_start = dec_start or decfunc
         # let's make sure the last layer is 1:1 to input no matter what
-        decfunc = cls.DLbackend.layers.Dense(Encoder.layers[0].input_shape[-1], activation=activators.get('regression', 'linear'), kernel_initializer='lecun_normal', name='decoder_{}'.format(len(lay_sizes)-1))
+        decfunc = keras.layers.Dense(Encoder.layers[0].input_shape[-1], activation=activators.get('regression', 'linear'), kernel_initializer='lecun_normal', name='decoder_{}'.format(len(lay_sizes)-1))
         decoded = decfunc(last_lay)
         dec_start = dec_start or decfunc
             
         Autoencoder = cls.DLmodel(inbound, decoded, name='Autoencoder')
         
         # dummy input for feeding into Decoder separately
-        dummy_in = cls.DLbackend.layers.Input([Encoder.layers[-1].output_shape[-1]])
+        dummy_in = keras.layers.Input([Encoder.layers[-1].output_shape[-1]])
         Decoder = cls.DLmodel(dummy_in, dec_start(dummy_in), name='Decoder') #this is bullshit rn
 
         return (Autoencoder, Encoder, Decoder)
@@ -161,14 +161,14 @@ class deepAE_dropout(deep_AE):
     @classmethod
     def input_preprocessing(cls, input_lay, *args, **kwargs):
         transformed = input_lay
-        transformed = cls.DLbackend.layers.AlphaDropout(0.5)(transformed)
+        transformed = keras.layers.AlphaDropout(0.5)(transformed)
         return transformed
     
 class labeled_AE(deep_AE):
     @classmethod
     def input_preprocessing(cls, input_lay, *args, **kwargs):
         transformed = input_lay
-        transformed = cls.DLbackend.layers.AlphaDropout(0.35)(transformed)
+        transformed = keras.layers.AlphaDropout(0.35)(transformed)
         return transformed
         
     @classmethod
@@ -187,15 +187,15 @@ class labeled_AE(deep_AE):
 
         # layers
         # Encoder: vals -> compressed vals
-        inbound = cls.DLbackend.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
+        inbound = keras.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
         last_lay = inbound
         
         last_lay = cls.input_preprocessing(last_lay, **kwargs)
         
         for (i, siz) in enumerate(lay_sizes):
             print(str(i)+':', siz or "NONE!")
-            encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i),
-                                                        kernel_regularizer=cls.DLbackend.regularizers.l1_l2(l1=0.01, l2=0.01)
+            encoder_node = keras.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i),
+                                                        kernel_regularizer=keras.regularizers.l1_l2(l1=0.01, l2=0.01)
                                                      )
             last_lay = encoder_node(last_lay)
         else: enc_out_layer = last_lay
@@ -205,27 +205,27 @@ class labeled_AE(deep_AE):
         # Diagnostician: compressed vals -> class
         # 'interface' layer for inspecting latent spaces as a predictive ensemble
         ensemble_inputs = {enc_out_layer}
-        interface_node = cls.DLbackend.layers.Dense(kwargs.get('ens_interface_size', lay_sizes[-1]), activation='linear', activity_regularizer=cls.DLbackend.regularizers.l2(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
+        interface_node = keras.layers.Dense(kwargs.get('ens_interface_size', lay_sizes[-1]), activation='linear', activity_regularizer=keras.regularizers.l2(0.01), kernel_initializer='lecun_normal', name='diagger_{}'.format(0))
         for assay_latent_space in ensemble_inputs:
             # corrupt each input separately
-            diagger_inp = cls.DLbackend.layers.AlphaDropout(0.1)(assay_latent_space)
+            diagger_inp = keras.layers.AlphaDropout(0.1)(assay_latent_space)
             # connect the interface layer to each input
             diagger = interface_node(diagger_inp)
-        #diagger = cls.DLbackend.layers.Dense(100, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='diagger_{}'.format(1))(diagger)
-        diagnosis = cls.DLbackend.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
-                                                kernel_initializer='lecun_normal', kernel_regularizer=cls.DLbackend.regularizers.l1(0.1),
+        #diagger = keras.layers.Dense(100, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='diagger_{}'.format(1))(diagger)
+        diagnosis = keras.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
+                                                kernel_initializer='lecun_normal', kernel_regularizer=keras.regularizers.l1(0.1),
                                                 name='diagnosis')(diagger)
         
         # Decoder: compressed vals -> regression vals
         dec_start = None
         for (i, siz) in enumerate(reversed(lay_sizes[:-1])):
             #print(i, siz)
-            decoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
+            decoder_node = keras.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
             decoded = decoder_node(last_lay)
             last_lay = decoded
             dec_start = dec_start or decoder_node
         # let's make sure the last layer is 1:1 to input no matter what
-        decoder_node = cls.DLbackend.layers.Dense(Encoder.layers[0].input_shape[-1], activation=activators.get('regression', 'linear'), kernel_initializer='lecun_normal', name='expression_out')
+        decoder_node = keras.layers.Dense(Encoder.layers[0].input_shape[-1], activation=activators.get('regression', 'linear'), kernel_initializer='lecun_normal', name='expression_out')
         decoded = decoder_node(last_lay)
         dec_start = dec_start or decoder_node
             
@@ -233,7 +233,7 @@ class labeled_AE(deep_AE):
         
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[diagnosis], name='Predictor')
         # dummy input for feeding into Decoder separately
-        #dummy_in = cls.DLbackend.layers.Input([Encoder.layers[-1].output_shape[-1]])
+        #dummy_in = keras.layers.Input([Encoder.layers[-1].output_shape[-1]])
         #Decoder = cls.DLmodel(dummy_in, dec_start(dummy_in), name='Decoder') #this is bullshit rn
 
         return (Autoencoder, Encoder, Diagnostician)
@@ -256,15 +256,15 @@ class coherent_AE(labeled_AE):
 
         # layers
         # Encoder: vals -> compressed vals
-        inbound = cls.DLbackend.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
+        inbound = keras.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
         last_lay = inbound
         
         last_lay = cls.input_preprocessing(last_lay, **kwargs)
         
         for (i, siz) in enumerate(lay_sizes):
             print(str(i)+':', siz or "NONE!")
-            encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i),
-                                                        kernel_regularizer=cls.DLbackend.regularizers.l1_l2(l1=0.01, l2=0.01)
+            encoder_node = keras.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='encoder_{}'.format(i),
+                                                        kernel_regularizer=keras.regularizers.l1_l2(l1=0.01, l2=0.01)
                                                      )
             last_lay = encoder_node(last_lay)
         else: enc_out_layer = last_lay
@@ -275,18 +275,18 @@ class coherent_AE(labeled_AE):
         dec_start = None
         for (i, siz) in enumerate(reversed(lay_sizes[:-1])):
             #print(i, siz)
-            decoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
+            decoder_node = keras.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
             decoded = decoder_node(last_lay)
             last_lay = decoded
             dec_start = dec_start or decoder_node
         # let's make sure the last layer is 1:1 to input no matter what
-        decoder_node = cls.DLbackend.layers.Dense(Encoder.layers[0].input_shape[-1], activation=activators.get('regression', 'linear'), kernel_initializer='lecun_normal', name='expression_out')
+        decoder_node = keras.layers.Dense(Encoder.layers[0].input_shape[-1], activation=activators.get('regression', 'linear'), kernel_initializer='lecun_normal', name='expression_out')
         decoded = decoder_node(last_lay)
         dec_start = dec_start or decoder_node
         
         # Diagnostician: vals -> class
-        diagger = cls.DLbackend.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
-                                                kernel_initializer='lecun_normal', kernel_regularizer=cls.DLbackend.regularizers.l1(0.1),
+        diagger = keras.layers.Dense(kwargs.get('num_classes', 3), activation=activators.get('classification', 'softmax'), 
+                                                kernel_initializer='lecun_normal', kernel_regularizer=keras.regularizers.l1(0.1),
                                                 name='diagnosis')(diagger)
         
         base_diagnosis = diagger(inbound)
@@ -307,7 +307,7 @@ class coherent_AE(labeled_AE):
         
         Diagnostician=cls.DLmodel(inputs=[inbound], outputs=[base_diagnosis], name='Diagnostician')
         # dummy input for feeding into Decoder separately
-        #dummy_in = cls.DLbackend.layers.Input([Encoder.layers[-1].output_shape[-1]])
+        #dummy_in = keras.layers.Input([Encoder.layers[-1].output_shape[-1]])
         #Decoder = cls.DLmodel(dummy_in, dec_start(dummy_in), name='Decoder') #this is bullshit rn
 
         return (Autoencoder, Encoder, Diagnostician)
@@ -318,13 +318,14 @@ class variational_deep_AE(labeled_AE):
     @classmethod
     def input_preprocessing(cls, input_lay, *args, **kwargs):
             transformed = input_lay
-            #transformed = cls.DLbackend.layers.BatchNormalization()(transformed)
-            #transformed = cls.DLbackend.layers.AlphaDropout(0.15)(transformed)
-            #transformed = cls.DLbackend.layers.Softmax()(transformed)
+            #transformed = keras.layers.BatchNormalization()(transformed)
+            #transformed = keras.layers.AlphaDropout(0.15)(transformed)
+            #transformed = keras.layers.Softmax()(transformed)
             return transformed
 
     @classmethod
     def build(cls, datashape, activators=None, compression_fac=None, latent_dims=2, **kwargs):
+        import keras
         activators = activators or {'deep': 'selu', 'regression': 'linear'}
         uncompr_size, compr_size = cls.calculate_sizes(datashape, compression_fac)
         
@@ -342,13 +343,16 @@ class variational_deep_AE(labeled_AE):
 
         # layers
         # Encoder: vals -> compressed vals
-        inbound = cls.DLbackend.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
+        inbound = keras.layers.Input(shape=([datashape[-1]] or [datashape[0]]), name='expression_in')
         last_lay = inbound
         
         preprocessed_inp = cls.input_preprocessing(last_lay, **kwargs)
         last_lay = preprocessed_inp
         
-        cust_layers = {0: {'sizemult':1, 'activation': 'selu'}}
+        encoding_nodes = []
+        decoding_nodes = []
+        
+        cust_layers = {}#1: {'sizemult':1, 'activation': 'tanh'}}
         
         for (i, siz) in enumerate(lay_sizes[:-1]):
             print(str(i)+':', siz or "NONE!")
@@ -358,37 +362,41 @@ class variational_deep_AE(labeled_AE):
                 
                 #split_layers = []
                 #for spl in range(splits):
-                encoder_node = cls.DLbackend.layers.Dense(siz*sizemult, activation=cust_act or activators.get('deep', 'selu'), 
+                encoder_node = keras.layers.Dense(siz*sizemult, activation=cust_act or activators.get('deep', 'selu'), 
                                                               kernel_initializer='lecun_normal',
-                                                              name='encoder_{}'.format(i),
+                                                              name='encoder_cust_{}'.format(i),
                                                               #name='encoder_{}-{}'.format(i,spl+1)
                                                               use_bias=False,
                                                              )
                 split = encoder_node(last_lay)
-                    #split = cls.DLbackend.layers.AlphaDropout(0.1)(split)
+                    #split = keras.layers.AlphaDropout(0.1)(split)
                     #split_layers.append(split)
-                #merged = cls.DLbackend.layers.concatenate(split_layers)
+                #merged = keras.layers.concatenate(split_layers)
                 last_lay = split
                 
             else:
-                encoder_node = cls.DLbackend.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal',
+                encoder_node = keras.layers.Dense(siz, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal',
                                                           name='encoder_{}'.format(i)
                                                          )
                 last_lay = encoder_node(last_lay)
                 
+            encoding_nodes.append(encoder_node)
+                
         else:
             # VAE stuff:
-            enc_mean = cls.DLbackend.layers.Dense(latent_dims, name='encoded_mean'.format())(last_lay)
-            inp_mean = cls.DLbackend.layers.Input(shape=(latent_dims,),
-                                                  tensor=cls.DLbackend.backend.zeros(shape=(latent_dims,)) # makes this input optional
+            enc_mean = keras.layers.Dense(latent_dims, name='encoded_mean'.format())(last_lay)
+            inp_mean = keras.layers.Input(shape=(latent_dims,),
+                                                  #tensor=keras.backend.zeros(shape=(latent_dims,)), # makes this input optional
+                                                  name='inp_mean (optional)',
                                                  )
-            enc_mean = cls.DLbackend.layers.add([enc_mean, inp_mean])
+            enc_mean = keras.layers.add([enc_mean, inp_mean])
             
-            enc_logstdev = cls.DLbackend.layers.Dense(latent_dims, name='encoded_log-stdev'.format())(last_lay)
-            inp_logstdev = cls.DLbackend.layers.Input(shape=(latent_dims,), 
-                                                      tensor=cls.DLbackend.backend.ones(shape=(latent_dims,)) # makes this input optional
+            enc_logstdev = keras.layers.Dense(latent_dims, name='encoded_log-stdev'.format())(last_lay)
+            inp_logstdev = keras.layers.Input(shape=(latent_dims,), 
+                                                      #tensor=keras.backend.ones(shape=(latent_dims,)), # makes this input optional
+                                                      name='inp_stdev (optional)',
                                                       )
-            enc_logstdev = cls.DLbackend.layers.multiply([enc_logstdev, inp_logstdev])
+            enc_logstdev = keras.layers.multiply([enc_logstdev, inp_logstdev])
             
             def sampler(distribution_params):
                 mean, log_stddev = distribution_params
@@ -396,109 +404,193 @@ class variational_deep_AE(labeled_AE):
                 std_norm = K.random_normal(shape=(K.shape(mean)[0], latent_dims), mean=0, stddev=1)
                 return mean + K.exp(log_stddev) * std_norm
             
-            latent_vector = cls.DLbackend.layers.Lambda(sampler, output_shape=(latent_dims,))([enc_mean, enc_logstdev])
+            latent_vector = keras.layers.Lambda(sampler, output_shape=(latent_dims,))([enc_mean, enc_logstdev])
             
             # encoder output layer:
             enc_out_layer = latent_vector
             
         last_lay = enc_out_layer
-        Encoder = cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[enc_mean, enc_logstdev], name='Encoder')
+        
         
         # Decoder: compressed vals -> regression vals
-        dec_start = None
-        for (i, siz) in enumerate(reversed(lay_sizes[:-1])):
+        for (i, siz) in []:#enumerate(reversed(lay_sizes[:-1])):
             #print(i, siz)
-            decoder_node = cls.DLbackend.layers.Dense(int(siz), activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
+            decoder_node = keras.layers.Dense(int(siz), activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
             decoded = decoder_node(last_lay)
+            decoding_nodes.append(decoder_node)
             last_lay = decoded
-            dec_start = dec_start or decoder_node
+        
+        # tiny layers for logical & nonlinear separation of the latent space
+        if False:
+            for i in range(4):
+                decoder_node = keras.layers.Dense(5, activation=activators.get('deep', 'selu'), kernel_initializer='lecun_normal', name='decoder_{}'.format(i))
+                decoded = decoder_node(last_lay)
+                decoding_nodes.append(decoder_node)
+                last_lay = decoded
             
         # let's make sure the last layer is 1:1 to input no matter what
-        #last_lay = cls.DLbackend.layers.BatchNormalization()(last_lay)
-        decoder_node = cls.DLbackend.layers.Dense(Encoder.layers[0].input_shape[-1], 
+        #last_lay = keras.layers.BatchNormalization()(last_lay)
+        decoder_node = keras.layers.Dense(encoding_nodes[0].input_shape[-1], 
                                                     activation=activators.get('regression', 'linear'), 
                                                     kernel_initializer='lecun_normal', 
                                                     name='expression_out',
                                                     use_bias=False,
-                                                    )
+                                                 )
         decoded = decoder_node(last_lay)
-        
-        dec_start = dec_start or decoder_node
-        Decoder = cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[decoded], name='Decoder')
+        decoding_nodes.append(decoder_node)
+        last_lay = decoded
         
         # Diagnostician: vals -> class; functions as the adversarial component of the model
-        
-        diagger = cls.DLbackend.layers.Dense(4, activation='softmax', 
-                                                kernel_initializer='lecun_normal',
+        diagger = keras.layers.Dense(4, activation='softmax', 
+                                                kernel_initializer='lecun_uniform',
                                                 use_bias=False,
-                                                name='diagnosis')
-                                                
+                                                name='diagnosis'
+                                            )
         # raw input diagnosis:
         base_diagnosis = diagger(preprocessed_inp) 
         # corrupted input diagnosis:
-        corr_diagnosis = diagger(cls.DLbackend.layers.AlphaDropout(0.5)(preprocessed_inp))
+        corr_diagnosis = diagger(keras.layers.Dropout(0.05)(preprocessed_inp))
         # generated output diagnosis:
         diagnosis = diagger(decoded)
         
-        Diagnostician=cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[decoded, base_diagnosis], name='Diagnostician')        
-        #Diagnostician.custom_loss = VAE_loss(enc_mean, enc_logstdev, base_diagnosis, diagnosis)
+        default_optimizer = keras.optimizers.RMSprop(lr=0.000003)
+        def top_2_accuracy(y_true, y_pred): return keras.metrics.top_k_categorical_accuracy(y_true, y_pred, k=2)
         
         Autoencoder = cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[decoded, corr_diagnosis, diagnosis], name='Autoencoder')
         Autoencoder.custom_loss = VAE_loss(enc_mean, enc_logstdev, base_diagnosis, diagnosis)
+        Autoencoder.compile(
+                             optimizer=kwargs.get('AE_optimizer') or default_optimizer, 
+                             loss={'diagnosis': 'categorical_crossentropy', 'expression_out': Autoencoder.custom_loss},
+                             loss_weights={'diagnosis': 2, 'expression_out': 1,},
+                             metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy', top_2_accuracy]},
+                             )
+        
+        def axiswise_kld_wrapper(*args, **kwargs): return axiswise_kld(enc_mean, enc_logstdev)
+        Encoder = cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[enc_mean, enc_logstdev], name='Encoder')
+        Encoder.compile(
+                        optimizer=kwargs.get('enc_optimizer') or default_optimizer, 
+                        loss=axiswise_kld_wrapper,
+                       )
+        
+        for l in encoding_nodes: l.trainable = False 
+        # NO ENCODER TRAINING BELOW:
+        
+        def recon_loss(*args, **kwargs): return keras.backend.categorical_crossentropy(base_diagnosis, 
+                                                                                       diagnosis
+                                                                                    )
+        Decoder = cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[decoded, diagnosis], name='Decoder')
+        Decoder.compile(
+                        optimizer=kwargs.get('enc_optimizer') or default_optimizer, 
+                        loss=recon_loss,
+                       )
+        
+        for l in decoding_nodes: l.trainable = False 
+        # NO AE TRAINING BELOW:
+        
+        Diagnostician=cls.DLmodel(inputs=[inbound, inp_mean, inp_logstdev], outputs=[decoded, base_diagnosis], name='Diagnostician')
+        Diagnostician.custom_loss = VAE_loss(enc_mean, enc_logstdev, base_diagnosis, diagnosis)
+        Diagnostician.compile(
+                             optimizer=kwargs.get('AE_optimizer') or default_optimizer, 
+                             loss={'diagnosis': 'categorical_crossentropy', 'expression_out': Diagnostician.custom_loss},
+                             loss_weights={'diagnosis': 18, 'expression_out': 2,},
+                             metrics={'diagnosis': ['binary_accuracy', 'categorical_accuracy', top_2_accuracy]},
+                             )
 
         return Autoencoder, Encoder, Diagnostician, Decoder
         
     @staticmethod
-    def batchgen(source, catlabels, batch_size=3): 
+    def batchgen(source, catlabels, batch_size=3, with_name=False, seek_novel=True): 
         """Defines data to retrieve from inputs on a per-model basis.
         :param source: an iterable of data
         :param catlabels: category labels
         :param batch_size: *starting* batch size; you may set new size on the returned generator without reinitializing
         """
         import keras.backend as K
+        import numpy as np
         
         def batcher():
-            _size = batch_size
+            _size = max(1, batch_size)
+            x_cache = set()
+            sentinel, tries = True, 0
             while source:
                 batch_expressions = None
                 batch_diagnoses = None
+                batch_means = None
+                batch_stdevs = None
+                batch_names = []
                 
-                for i in range(batch_size):
+                for i in range(_size):
+                    sentinel = False
                     x = next(source)
+                    curr_batch_name = x.columns[-1]
+                    if seek_novel and curr_batch_name in x_cache: 
+                        tries += 1
+                        if tries < 5: continue
+                        else: 
+                            x_cache.pop()
+                            tries = 0
+                    sentinel = True
+                    x_cache |= set([curr_batch_name])
+                    while len(x_cache) > 20: x_cache.pop()
+                    tries = 0
+                    
+
                     expression = K.variable(x.sort_index().T.values)
                     raw_expr = K.get_value(expression)
                     xmax, xmin = raw_expr.max(), raw_expr.min()
 
-                    expression, expr_mean, expr_var = SDutils.inp_batch_norm(raw_expr)
+                    expression, expr_mean, expr_std = SDutils.inp_batch_norm(raw_expr)
+                    expr_mean, expr_std = [[0, 0]], [[1, 1]] # for prediction; not the actual mean/var of sample
                     #print("BATCH XPR: ", expression)
                     expression = K.variable(expression)
+                    expr_mean, expr_std = K.variable(np.array(expr_mean)), K.variable(np.array(expr_std))
                     
-                    diagnosis = K.variable(catlabels.get(str(x.index.name).upper(), [0.33, 0.33, 0.33]))
-                    #print("\n", "EXPR: ", "\n", xmin, K.eval(expression).min(), "\n", xmax, K.eval(expression).max(), "\n", raw_expr, "\n", expression)
-                    #if input('Cont.?'): break
-                    #print("\n", "DIAG: ", "\n", K.eval(diagnosis), "\n", x.index.name, "\n", catlabels, "\n")
-                    batch_expressions = K.concatenate([batch_expressions, expression], axis=0) if batch_expressions is not None else expression
+                    diagnosis = catlabels.get(str(x.index.name).upper(), [0,0,0,0])
+                    #print(x.index.name)
+                    try: diagnosis = K.variable(diagnosis)
+                    except ValueError: diagnosis = K.variable([[0,0,0,0]])
+                    
                     batch_diagnoses = K.concatenate([batch_diagnoses, diagnosis], axis=0) if batch_diagnoses is not None else diagnosis
+                    batch_expressions = K.concatenate([batch_expressions, expression], axis=0) if batch_expressions is not None else expression
+                    batch_means = K.concatenate([batch_means, expr_mean], axis=0) if batch_means is not None else expr_mean
+                    batch_stdevs = K.concatenate([batch_stdevs, expr_std], axis=0) if batch_stdevs is not None else expr_std
                     
+                    if with_name: batch_names = batch_names + [curr_batch_name]
+                    
+                if not sentinel: continue
                 #print("\n", "BATCH: ", "\n", K.eval(batch_expressions), "\n", K.eval(batch_diagnoses), "\n",)
                 #if input('Cont.?'): raise RuntimeError
+                #print("Generating a batch...")
+                inp_means, inp_stdevs = K.eval(batch_means), K.eval(batch_stdevs) # for DRY purposes
                     
                 batch = ((
                             {
                              'expression_in': K.eval(batch_expressions),
                              'diagnosis_in': K.eval(batch_diagnoses),
+                             # aliases due to naming issues
+                             'inp_mean': inp_means,
+                             'inp_mean (optional)': inp_means,
+                             'input_1': inp_means,
+                             'inp_stdev': inp_stdevs,
+                             'inp_stdev (optional)': inp_stdevs,
+                             'input_2': inp_stdevs
                             },
                             {
                              'expression_out': K.eval(batch_expressions),
                              'diagnosis': K.eval(batch_diagnoses),
                             }
                         ))
-                new_size = yield batch
+                #print(batch)
+                new_size = yield ((batch, batch_names) if with_name else batch)
                 try: new_size = abs(int(new_size))
                 except Exception as E: new_size = None
                 _size = new_size if new_size and new_size > 0 else _size
                 
         return batcher()
+    
+def axiswise_kld(mean, logSTD):
+    import keras.backend as K
+    return 0.5 * K.sum(K.exp(logSTD) + K.square(mean) - 1. - logSTD, axis=1)
     
 def VAE_loss(enc_mean, enc_logstdev, base_diagnosis, diagnosis, *args, **kwargs):
     def _VAElossFunc(inp, outp):
@@ -506,11 +598,18 @@ def VAE_loss(enc_mean, enc_logstdev, base_diagnosis, diagnosis, *args, **kwargs)
         import keras.backend as K
         
         # penalizes non-normal distribution of encodings in latent space
-        kl_loss = -0.5 * K.clip(K.sum(1 - K.square(enc_mean) + enc_logstdev - K.square(K.exp(enc_logstdev+K.epsilon())), axis=-1), -200000, -K.epsilon())
+        #kl_loss = -0.5 * K.clip(K.sum(1 - K.square(enc_mean) + enc_logstdev - K.square(K.exp(enc_logstdev+K.epsilon())), axis=-1), -200000, -K.epsilon())
+        kl_loss = axiswise_kld(enc_mean, enc_logstdev)
         
         # penalizes loss of predictive information after compression, *NOT* an incorrect prediction (penalized by Decoder loss)
         import keras.losses as kL
-        reconstruction_loss = kL.categorical_crossentropy(K.epsilon()+base_diagnosis, K.epsilon()+diagnosis)
+        #print("DIAGNOSES DEBUG:")
+        #print(K.eval(base_diagnosis))
+        #print(K.eval(diagnosis))
+        #K.print_tensor(base_diagnosis)
+        #K.print_tensor(diagnosis)
+        reconstruction_loss = (K.categorical_crossentropy(base_diagnosis, diagnosis) + 0.5*kL.mae(inp, outp)
+                               )
         
         total_loss = K.mean(reconstruction_loss + kl_loss)
         return total_loss

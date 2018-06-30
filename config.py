@@ -13,11 +13,11 @@ class MenuConfiguration(object):
     defaults =  (
                     ('train_steps', 30), 
                     ('test_steps', 10), 
-                    ('batch_size', 30),
-                    (LABEL_SAMPLE_SIZE, None), 
+                    ('batch_size', 1),
+                    (LABEL_SAMPLE_SIZE, None),
                     
-                    ('model_depth', 14), 
-                    ('compression_fac', 1700),
+                    ('model_depth', 9), 
+                    ('compression_fac', 900),
                     ('depth_scaling', 1.15),
                     
 
@@ -27,6 +27,7 @@ class MenuConfiguration(object):
                     ('usemodel', 0),
                     ('list_cwd', False), 
                     ('drop_labels', False),
+                    ('weight_loading', 'weights'), # or 'model'
                     ('category_regexes', list(label_dicts.default.keys())),
                 )
 
